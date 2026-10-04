@@ -269,6 +269,14 @@ class Cache:
         for row in planned:
             self._remove_audio(row)
 
+        # Unlink can fail after planning (permissions, filesystem errors). Re-read
+        # persistent accounting and available disk before letting the caller admit
+        # bytes; a planned deletion only counts after its row was actually removed.
+        remaining_usage = self._pool_usage(pool, exclude_key) + pool_bytes
+        remaining_disk = self.disk_free_bytes() - self._pending_disk_bytes(exclude_key) - disk_commitment_bytes
+        if remaining_usage > limit or remaining_disk < self.config.min_free_disk_bytes:
+            raise CacheCapacityError("cache capacity is pinned or could not be reclaimed", code="cache_capacity")
+
     def _entry_if_valid(self, key: AudioKey, now: float | None = None) -> CacheEntry | None:
         row = self.store.get_audio(key)
         if row is None:

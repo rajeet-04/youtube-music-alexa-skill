@@ -194,6 +194,31 @@ def test_lru_eviction_uses_last_accepted_access(cache: Cache, clock: FakeClock) 
     assert cache.lookup(incoming_key) is not None
 
 
+def test_failed_unlink_does_not_count_as_evicted_pool_capacity(
+    cache: Cache, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache.config = replace(cache.config, requested_limit_bytes=8)
+    blocked_key, blocked_path = make_audio(cache, "unlink-blocked", 4)
+    other_key, other_path = make_audio(cache, "unlink-other", 4)
+    blocked_entry = cache.complete(blocked_key, blocked_path, requested=True)
+    cache.complete(other_key, other_path, requested=True)
+    cache.config = replace(cache.config, requested_limit_bytes=4)
+    incoming_key, incoming_path = make_audio(cache, "unlink-incoming", 1)
+    original_unlink = Path.unlink
+
+    def fail_blocked_unlink(path: Path, *args: object, **kwargs: object) -> None:
+        if path == blocked_entry.path:
+            raise PermissionError("simulated undeletable cache file")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_blocked_unlink)
+    with pytest.raises(CacheCapacityError):
+        cache.complete(incoming_key, incoming_path, requested=True)
+
+    assert cache.lookup(blocked_key) is not None
+    assert cache.lookup(incoming_key) is None
+
+
 def test_active_reader_blocks_promotion_eviction_race(cache: Cache) -> None:
     cache.config = replace(cache.config, requested_limit_bytes=4)
     requested_key, requested_path = make_audio(cache, "leased-requested", 4)
@@ -360,9 +385,9 @@ def test_reusing_reservation_never_shrinks_below_written_bytes(cache: Cache) -> 
 def test_lease_pins_audio_when_free_disk_is_low(cache: Cache, clock: FakeClock) -> None:
     cache.config = replace(cache.config, requested_limit_bytes=8, min_free_disk_bytes=10)
     free_disk = [100]
-    cache.disk_free_bytes = lambda: free_disk[0]
     pinned_key, pinned_path = make_audio(cache, "disk-pinned", 4)
-    cache.complete(pinned_key, pinned_path, requested=True)
+    pinned_entry = cache.complete(pinned_key, pinned_path, requested=True)
+    cache.disk_free_bytes = lambda: free_disk[0] + (4 if not pinned_entry.path.exists() else 0)
     incoming_key, incoming_path = make_audio(cache, "disk-incoming", 4)
 
     with cache.lease(pinned_key):

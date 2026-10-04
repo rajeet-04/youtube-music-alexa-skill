@@ -100,3 +100,27 @@ Flask suite before this task recorded 298 passed, 31 failed, and 3 warnings; fai
 were in existing Echo/player, browser-sidecar, and static-asset tests. The cache
 focused suite passes independently. Full integration should rerun the complete
 service suite after later JUKES tasks land.
+
+## Follow-up review fix
+
+The first Task 1 commit could count a planned LRU removal even when unlink failed.
+A temporary-file regression test injected `PermissionError` on the oldest file and
+confirmed the bug: completion was admitted without raising, leaving requested usage
+above the configured pool limit. The fix re-reads persisted pool usage and available
+disk after attempted removals. Failed unlinks retain their rows and bytes; admission
+raises `CacheCapacityError` if the remaining limits still do not fit. The low-disk
+fixture now reflects reclaimed space only after the real temporary file is removed.
+
+RED/GREEN for the regression:
+
+```text
+RED: test_failed_unlink_does_not_count_as_evicted_pool_capacity
+     failed because Cache.complete did not raise
+GREEN: focused Task 1 suite — 21 passed in 1.18s
+```
+
+`reserve` intentionally does not provide a duplicate-job coordinator: Task 2 must
+single-flight each `AudioKey` and ensure exactly one extractor writes a returned
+reservation path. The deployment also assumes one cache-owner service process; the
+later app lifecycle task must enforce that exclusive-process assumption. The cache
+lock itself coordinates threads in that process.
