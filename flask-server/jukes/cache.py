@@ -573,8 +573,12 @@ class Cache:
                 output.flush()
             return len(data)
 
-    @contextmanager
-    def lease(self, key: AudioKey) -> Iterator[CacheEntry | None]:
+    def open_lease(self, key: AudioKey, *, touch: bool = True) -> tuple[CacheEntry | None, Callable[[], None]]:
+        """Pin a ready entry against eviction; returns ``(entry, release)``.
+
+        ``release`` is idempotent. ``touch=False`` leaves LRU recency alone
+        (HEAD and other inspections).
+        """
         lease_id: str | None = None
         entry: CacheEntry | None = None
         with _COORDINATOR_LOCK:
@@ -589,16 +593,29 @@ class Cache:
                         "VALUES (?, ?, ?, ?, ?, ?)",
                         (lease_id, key.video_id, key.policy, self._pid, self._process_start_token, self.clock()),
                     )
-                    connection.execute(
-                        "UPDATE jukes_audio SET last_used = ? WHERE video_id = ? AND policy = ?",
-                        (self.clock(), key.video_id, key.policy),
-                    )
+                    if touch:
+                        connection.execute(
+                            "UPDATE jukes_audio SET last_used = ? WHERE video_id = ? AND policy = ?",
+                            (self.clock(), key.video_id, key.policy),
+                        )
+        released = threading.Event()
+
+        def release() -> None:
+            if lease_id is None or released.is_set():
+                return
+            released.set()
+            with _COORDINATOR_LOCK, self.store.transaction() as connection:
+                connection.execute("DELETE FROM jukes_leases WHERE lease_id = ?", (lease_id,))
+
+        return entry, release
+
+    @contextmanager
+    def lease(self, key: AudioKey, *, touch: bool = True) -> Iterator[CacheEntry | None]:
+        entry, release = self.open_lease(key, touch=touch)
         try:
             yield entry
         finally:
-            if lease_id is not None:
-                with _COORDINATOR_LOCK, self.store.transaction() as connection:
-                    connection.execute("DELETE FROM jukes_leases WHERE lease_id = ?", (lease_id,))
+            release()
 
     def _remove_reservation(self, key: AudioKey) -> None:
         with self.store.transaction() as connection:
