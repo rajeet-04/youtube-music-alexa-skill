@@ -89,6 +89,21 @@ class Store:
                 );
                 CREATE INDEX IF NOT EXISTS jukes_leases_key
                     ON jukes_leases(video_id, policy);
+                CREATE TABLE IF NOT EXISTS jukes_jobs (
+                    job_id TEXT PRIMARY KEY,
+                    video_id TEXT NOT NULL,
+                    policy TEXT NOT NULL,
+                    requested INTEGER NOT NULL CHECK (requested IN (0, 1)),
+                    status TEXT NOT NULL CHECK (status IN ('queued', 'downloading', 'ready', 'failed')),
+                    error_code TEXT,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    recovery_count INTEGER NOT NULL DEFAULT 0,
+                    owner_pid INTEGER NOT NULL DEFAULT 0,
+                    owner_start TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS jukes_jobs_status
+                    ON jukes_jobs(status, updated_at);
                 """
             )
             reservation_columns = {
