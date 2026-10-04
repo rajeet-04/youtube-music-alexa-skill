@@ -1,7 +1,8 @@
 """Private controller for a persistent, owner-operated YT Music browser.
 
-Only redacted lifecycle state crosses this API. Captured request headers are
-returned once and are never written to logs or the Chromium profile volume.
+Only redacted lifecycle state crosses this API. Signed-in headers and Netscape
+cookie snapshots are returned once to callers with the control token; secrets
+are not logged or written to the Chromium profile volume.
 """
 import hmac
 import logging
@@ -11,7 +12,7 @@ import threading
 import time
 from urllib.parse import urlparse
 
-from flask import Flask, jsonify, request
+from flask import Flask, Response, jsonify, request
 
 app = Flask(__name__)
 logger = logging.getLogger(__name__)
@@ -22,6 +23,9 @@ SUCCESS_DISPLAY_SECONDS = float(os.environ.get("YT_BROWSER_SUCCESS_DISPLAY", "12
 PROFILE_DIR = os.environ.get("CHROME_USER_DATA_DIR", "/profile")
 CHROMIUM = os.environ.get("CHROMIUM_EXECUTABLE", "/usr/bin/chromium")
 CDP_URL = os.environ.get("CHROMIUM_CDP_URL", "http://127.0.0.1:9222")
+COOKIE_EXPORT_TTL = 300
+COOKIE_EXPORT_MAX_COOKIES = 512
+COOKIE_EXPORT_MAX_BYTES = 1_000_000
 
 _lock = threading.RLock()
 _state = {
@@ -29,10 +33,136 @@ _state = {
     "updated_at": time.time(), "message": None,
 }
 _candidate = None
+_cookie_export_candidate = None
+_cookie_export_timer = None
+_cookie_export_expired = False
 _worker = None
 _manual_browser = None
 _complete_requested = False
 _capture_requested = threading.Event()
+
+
+class CookieExportTooLarge(Exception):
+    """A browser cookie snapshot exceeded the bounded export size."""
+
+
+class CookieExportInvalid(Exception):
+    """A browser cookie cannot be represented safely in Netscape format."""
+
+
+def _clear_cookie_export_candidate(expected=None, *, expired=False):
+    """Drop a pending jar and cancel its timer, optionally by identity."""
+    global _cookie_export_candidate, _cookie_export_timer, _cookie_export_expired
+    with _lock:
+        if expected is not None and _cookie_export_candidate is not expected:
+            return None
+        candidate, _cookie_export_candidate = _cookie_export_candidate, None
+        timer, _cookie_export_timer = _cookie_export_timer, None
+        if expired and candidate is not None:
+            _cookie_export_expired = True
+        elif expected is None:
+            _cookie_export_expired = False
+    if timer is not None and timer is not threading.current_thread():
+        timer.cancel()
+    return candidate
+
+
+def _expire_cookie_export_candidate(candidate):
+    _clear_cookie_export_candidate(candidate, expired=True)
+
+
+def _store_cookie_export_candidate(candidate):
+    """Keep one export candidate and schedule identity-checked cleanup."""
+    global _cookie_export_candidate, _cookie_export_timer, _cookie_export_expired
+    timer = threading.Timer(
+        COOKIE_EXPORT_TTL, _expire_cookie_export_candidate, args=(candidate,),
+    )
+    timer.daemon = True
+    with _lock:
+        previous_timer = _cookie_export_timer
+        _cookie_export_candidate = candidate
+        _cookie_export_timer = timer
+        _cookie_export_expired = False
+        timer.start()
+    if previous_timer is not None and previous_timer is not threading.current_thread():
+        previous_timer.cancel()
+
+
+def _take_cookie_export_candidate():
+    """Consume a pending jar and cancel automatic cleanup."""
+    global _cookie_export_candidate, _cookie_export_timer, _cookie_export_expired
+    with _lock:
+        candidate, _cookie_export_candidate = _cookie_export_candidate, None
+        timer, _cookie_export_timer = _cookie_export_timer, None
+        if candidate is not None:
+            _cookie_export_expired = False
+    if timer is not None and timer is not threading.current_thread():
+        timer.cancel()
+    return candidate
+
+
+def _format_netscape_cookie_jar(cookies):
+    """Return a bounded Netscape jar containing only YouTube cookies."""
+    lines = ["# Netscape HTTP Cookie File"]
+    youtube_cookie_count = 0
+    has_auth_cookie = False
+    auth_cookie_names = {
+        "SAPISID", "SAPISID1P", "SAPISID3P", "SID",
+        "__Secure-1PSID", "__Secure-3PSID",
+        "__Secure-1PAPISID", "__Secure-3PAPISID",
+    }
+
+    for cookie in cookies:
+        if not isinstance(cookie, dict):
+            continue
+        domain = cookie.get("domain")
+        if not isinstance(domain, str):
+            continue
+        normalized_domain = domain.lstrip(".").rstrip(".").lower()
+        if not (normalized_domain == "youtube.com"
+                or normalized_domain.endswith(".youtube.com")):
+            continue
+        domain = (f".{normalized_domain}" if domain.startswith(".")
+                  else normalized_domain)
+
+        youtube_cookie_count += 1
+        if youtube_cookie_count > COOKIE_EXPORT_MAX_COOKIES:
+            raise CookieExportTooLarge
+
+        name = cookie.get("name")
+        value = cookie.get("value")
+        path = cookie.get("path", "/")
+        if not isinstance(name, str) or not name or not isinstance(value, str):
+            raise CookieExportInvalid
+        if not isinstance(path, str) or not path.startswith("/"):
+            path = "/"
+        fields = (domain, path, name, value)
+        if any(any(char in field for char in "\t\r\n") for field in fields):
+            raise CookieExportInvalid
+
+        try:
+            expires = float(cookie.get("expires", -1))
+        except (TypeError, ValueError, OverflowError):
+            raise CookieExportInvalid from None
+        if not (expires == expires and abs(expires) != float("inf")):
+            raise CookieExportInvalid
+        expiry = str(int(expires)) if expires > 0 else "0"
+        include_subdomains = "TRUE" if domain.startswith(".") else "FALSE"
+        secure = "TRUE" if cookie.get("secure") else "FALSE"
+        netscape_domain = domain
+        if cookie.get("httpOnly"):
+            netscape_domain = f"#HttpOnly_{domain}"
+        lines.append("\t".join((
+            netscape_domain, include_subdomains, path, secure, expiry, name, value,
+        )))
+        has_auth_cookie = has_auth_cookie or (name in auth_cookie_names and bool(value))
+
+    if not youtube_cookie_count or not has_auth_cookie:
+        raise CookieExportInvalid
+    jar = "\n".join(lines) + "\n"
+    if len(jar.encode("utf-8")) > COOKIE_EXPORT_MAX_BYTES:
+        raise CookieExportTooLarge
+    return jar
 
 
 def _clear_profile_singleton_artifacts():
@@ -183,12 +313,16 @@ def accepted_browse_url(url):
             and parsed.path.startswith("/youtubei/v1/"))
 
 
+def _has_valid_control_token():
+    supplied = request.headers.get("X-Control-Token", "")
+    return bool(CONTROL_TOKEN) and hmac.compare_digest(supplied, CONTROL_TOKEN)
+
+
 @app.before_request
 def require_control_token():
     if request.path == "/health":
         return None
-    supplied = request.headers.get("X-Control-Token", "")
-    if not CONTROL_TOKEN or not hmac.compare_digest(supplied, CONTROL_TOKEN):
+    if not _has_valid_control_token():
         return jsonify({"error": "unauthorized"}), 401
 
 
@@ -205,6 +339,7 @@ def _set_state(name, **extra):
 def _capture_from_running_browser(interactive):
     """Attach briefly to the existing Chromium process and validate YT Music."""
     global _candidate
+    _clear_cookie_export_candidate()
     from playwright.sync_api import sync_playwright
 
     captured = threading.Event()
@@ -245,8 +380,26 @@ def _capture_from_running_browser(interactive):
                 return
             if not authenticated_browse_headers(headers):
                 return
+            export_error_status = None
+            try:
+                cookie_jar = _format_netscape_cookie_jar(context.cookies())
+            except CookieExportTooLarge:
+                cookie_jar = None
+                export_error_status = 413
+            except CookieExportInvalid:
+                cookie_jar = None
+                export_error_status = 422
+            except Exception:
+                cookie_jar = None
+                export_error_status = 503
+            cookie_candidate = {
+                "created_at": time.time(),
+                "jar": cookie_jar,
+                "error_status": export_error_status,
+            }
             with _lock:
                 _candidate = {"url": response.url, "headers": headers}
+                _store_cookie_export_candidate(cookie_candidate)
             captured.set()
             _set_state("captured", interactive=interactive, message=None)
 
@@ -329,6 +482,7 @@ def _start(interactive):
         if _worker and _worker.is_alive():
             return False
         _candidate = None
+        _clear_cookie_export_candidate()
         _complete_requested = False
         _capture_requested.clear()
         _state["interactive"] = interactive
@@ -408,3 +562,42 @@ def candidate_take():
         return jsonify({"error": "candidate_not_ready"}), 404
     _set_state("candidate_taken", message=None)
     return jsonify(candidate)
+
+
+@app.get("/cookies/export")
+def cookies_export():
+    global _cookie_export_expired
+    if not _has_valid_control_token():
+        response = jsonify({"error": "unauthorized"})
+        response.headers["Cache-Control"] = "no-store"
+        return response, 401
+
+    candidate = _take_cookie_export_candidate()
+    if candidate is None:
+        with _lock:
+            expired, _cookie_export_expired = _cookie_export_expired, False
+        if expired:
+            response = jsonify({"error": "cookie_export_expired"})
+            response.headers["Cache-Control"] = "no-store"
+            return response, 410
+        response = jsonify({"error": "cookie_export_unavailable"})
+        response.headers["Cache-Control"] = "no-store"
+        return response, 409
+    if time.time() - candidate["created_at"] >= COOKIE_EXPORT_TTL:
+        response = jsonify({"error": "cookie_export_expired"})
+        response.headers["Cache-Control"] = "no-store"
+        return response, 410
+    if candidate["error_status"] is not None:
+        errors = {
+            413: "cookie_export_too_large",
+            422: "cookie_export_invalid",
+            503: "cookie_export_unavailable",
+        }
+        response = jsonify({"error": errors[candidate["error_status"]]})
+        response.headers["Cache-Control"] = "no-store"
+        return response, candidate["error_status"]
+
+    response = Response(candidate["jar"], mimetype="text/plain")
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response

@@ -237,6 +237,18 @@ class Jobs:
             return None
         return job
 
+    def stats(self) -> dict[str, Any]:
+        """Redacted queue counters for the admin view."""
+        with self._cond:
+            counts = {"queued": 0, "downloading": 0, "ready": 0, "failed": 0}
+            errors: dict[str, int] = {}
+            for job in self._jobs.values():
+                counts[job.status] = counts.get(job.status, 0) + 1
+                if job.status == "failed" and job.error_code:
+                    errors[job.error_code] = errors.get(job.error_code, 0) + 1
+            return {"jobs": counts, "failure_codes": errors, "workers": self.worker_count,
+                    "queue_limit": self.max_queue_size}
+
     def has_active(self, key: AudioKey) -> bool:
         """True while a queued or running job already covers ``key``."""
         with self._cond:

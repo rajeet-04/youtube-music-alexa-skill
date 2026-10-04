@@ -62,6 +62,7 @@ class Services:
     identity: Any = None
     credentials: Any = None
     limiter: Any = None
+    server_cookies: Any = None
     # Optional hook for admin/readiness code; routes themselves use identity/credentials.
     context_provider: Callable[[str], UserContext] | None = None
 

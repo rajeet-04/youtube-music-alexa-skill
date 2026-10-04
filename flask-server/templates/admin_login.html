@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JUKES admin sign in</title>
+<style>body{font:16px system-ui;margin:3rem auto;max-width:22rem;padding:0 1rem}input,button{font:inherit;padding:.5rem;width:100%;box-sizing:border-box;margin:.25rem 0}</style>
+</head><body>
+<h1>JUKES admin</h1>
+<form method="post" action="/admin/login">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label>Password<input type="password" name="password" autocomplete="current-password" required autofocus></label>
+  <button type="submit">Sign in</button>
+</form>
+</body></html>

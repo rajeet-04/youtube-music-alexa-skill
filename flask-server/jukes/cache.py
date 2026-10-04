@@ -163,6 +163,11 @@ class Cache:
         except OSError:
             return 0
 
+    def usage(self) -> dict[str, int]:
+        """Bytes in each pool including in-flight reservations (read-only)."""
+        with _COORDINATOR_LOCK:
+            return {pool: self._pool_usage(pool) for pool in ("requested", "warmup")}
+
     def _pool_usage(self, pool: str, exclude_key: AudioKey | None = None) -> int:
         key_values = (exclude_key.video_id, exclude_key.policy) if exclude_key else None
         total = 0

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JUKES admin</title>
+<style>
+body{font:15px system-ui;margin:1.5rem auto;max-width:44rem;padding:0 1rem;line-height:1.45}
+section{border:1px solid #8884;border-radius:8px;padding:1rem;margin:1rem 0}
+h2{margin:.1rem 0 .6rem;font-size:1.05rem}table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:.2rem .4rem}
+button,input[type=file],textarea{font:inherit}textarea{width:100%;min-height:6rem;box-sizing:border-box}
+.bar{background:#8883;border-radius:4px;height:.6rem}.bar>i{display:block;background:#2b7;height:100%;border-radius:4px}
+</style></head><body>
+<h1>JUKES admin</h1>
+<form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Sign out</button></form>
+
+<section><h2>Cache pools</h2>
+{% for name, pool in status.pools.items() %}
+  <p>{{ name|capitalize }}: {{ '%.2f'|format(pool.used_bytes/1e9) }} GB of {{ '%.2f'|format(pool.limit_bytes/1e9) }} GB
+  {% if pool.ttl_seconds %}(expires {{ pool.ttl_seconds }}s after completion){% endif %}</p>
+  <div class="bar"><i style="width:{{ [100, (pool.used_bytes*100/pool.limit_bytes)|int]|min }}%"></i></div>
+{% endfor %}</section>
+
+<section><h2>Jobs</h2>
+<table><tr>{% for k, v in status.jobs.jobs.items() %}<th>{{ k }}</th>{% endfor %}</tr>
+<tr>{% for k, v in status.jobs.jobs.items() %}<td>{{ v }}</td>{% endfor %}</tr></table>
+<p>{{ status.jobs.workers }} workers, queue limit {{ status.jobs.queue_limit }}.
+{% if status.jobs.failure_codes %}Failures: {% for k, v in status.jobs.failure_codes.items() %}{{ k }}&times;{{ v }} {% endfor %}{% endif %}</p></section>
+
+<section><h2>Download cookies</h2>
+<p>Status: {% if status.cookies.connected %}connected (generation {{ status.cookies.generation }}, {{ status.cookies.cookie_count }} cookies){% else %}not connected{% endif %}.
+These cookies only help extract public audio; they never personalise recommendations.</p>
+<form method="post" action="/admin/cookies" enctype="multipart/form-data">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <p><input type="file" name="file"></p>
+  <p><textarea name="text" placeholder="…or paste a Netscape cookies.txt"></textarea></p>
+  <button>Save cookies</button>
+</form>
+<form method="post" action="/admin/cookies/delete"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Remove cookies</button></form>
+</section>
+
+<section><h2>Sign in with YouTube</h2>
+{% if status.browser_configured %}
+<p>Start a short-lived private browser, sign in through it, then export the session.</p>
+<p><button onclick="act('start')">Start browser</button>
+<button onclick="act('export')">Export session</button>
+<button onclick="act('refresh')">Refresh saved profile</button>
+<button onclick="act('close')">Close browser</button></p>
+<p><a id="login" href="/youtube-login/vnc.html" target="_blank" rel="noopener">Open browser window</a></p>
+<pre id="out"></pre>
+<script>
+const csrf = {{ csrf|tojson }};
+async function act(name){
+  const r = await fetch('/admin/youtube/browser/'+name, {method:'POST', headers:{'X-CSRF-Token':csrf}});
+  document.getElementById('out').textContent = r.status + ' ' + (await r.text()).slice(0, 400);
+  if (name === 'export' && r.ok) location.reload();
+}
+</script>
+{% else %}<p>The browser service is not configured.</p>{% endif %}
+</section>
+</body></html>
