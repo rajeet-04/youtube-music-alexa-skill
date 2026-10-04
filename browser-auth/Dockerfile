@@ -1,4 +1,8 @@
+FROM ghcr.io/astral-sh/uv:0.12.23 AS uv-bin
+
 FROM python:3.12-slim
+
+COPY --from=uv-bin /uv /uvx /usr/local/bin/
 
 ENV DEBIAN_FRONTEND=noninteractive \
     DISPLAY=:99 \
@@ -11,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN uv pip install --system --no-cache -r requirements.txt
 COPY service.py entrypoint.sh novnc-controls.js ./
 RUN chmod 0755 /app/entrypoint.sh \
     && mkdir -p /profile \

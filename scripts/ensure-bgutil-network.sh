@@ -13,28 +13,22 @@
 # re-applies it and is safe to run any number of times.
 #
 # Run manually after recreating bgutil-provider, or install the accompanying
-# systemd unit (see ensure-bgutil-network.service in this directory) to run
-# it automatically on every boot / docker.service start.
-#
-# NOTE on the installed systemd unit: it is Type=oneshot with
-# RemainAfterExit=yes, so `systemctl start ensure-bgutil-network` is a no-op
-# once the unit is already "active (exited)" -- systemd will not re-run
-# ExecStart for an already-active oneshot. To force a re-check/re-attach
-# after manually recreating bgutil-provider, run this script directly, or
-# use `systemctl restart ensure-bgutil-network` (not `start`).
+# systemd unit (see ensure-bgutil-network.service) to retry while the Docker
+# network/provider is unavailable and re-check on each later unit start.
 set -euo pipefail
 
 NETWORK="web"
 CONTAINER="bgutil-provider"
+RETRY_EXIT=75
 
 if ! docker inspect "$CONTAINER" >/dev/null 2>&1; then
-    echo "ensure-bgutil-network: container '$CONTAINER' does not exist, nothing to do" >&2
-    exit 0
+    echo "ensure-bgutil-network: container '$CONTAINER' is unavailable; retry later" >&2
+    exit "$RETRY_EXIT"
 fi
 
 if ! docker network inspect "$NETWORK" >/dev/null 2>&1; then
-    echo "ensure-bgutil-network: network '$NETWORK' does not exist yet, nothing to do" >&2
-    exit 0
+    echo "ensure-bgutil-network: network '$NETWORK' is unavailable; retry later" >&2
+    exit "$RETRY_EXIT"
 fi
 
 already_attached=$(docker inspect "$CONTAINER" \

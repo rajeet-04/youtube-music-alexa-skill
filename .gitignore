@@ -24,3 +24,10 @@ BUG_REPORT.md
 FRONTEND_REPORT.md
 test_images/
 cookies_premium.txt
+# VPN profiles and tool installs (placeholders in *.example stay tracked)
+vpn/wireguard/wg0.conf
+vpn/wireguard/*.conf
+!vpn/wireguard/*.example
+vpn/openvpn/*.ovpn
+!vpn/openvpn/*.example
+node_modules/

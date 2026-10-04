@@ -1,0 +1,11 @@
+# Copy to wg0.conf and fill from the Surfshark dashboard (Manual setup -> WireGuard, India).
+# This example holds NO real keys.
+[Interface]
+PrivateKey = <YOUR_SURFSHARK_WIREGUARD_PRIVATE_KEY>
+Address = <YOUR_ASSIGNED_ADDRESS>/16
+DNS = 162.252.172.57, 149.154.159.92
+
+[Peer]
+PublicKey = <SURFSHARK_SERVER_PUBLIC_KEY>
+AllowedIPs = 0.0.0.0/0
+Endpoint = <in-server-hostname>:51820

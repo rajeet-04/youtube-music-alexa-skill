@@ -3,55 +3,64 @@ services:
     build: ./flask-server
     container_name: ytmusic
     restart: unless-stopped
-    # should only use when the vpn is connected
-    network_mode: "container:gluetun"
+    # Gluetun is managed outside this Compose project. Keep both app and browser
+    # in the selected VPN namespace so a VPN disconnect is handled by its
+    # kill-switch instead of silently falling back to direct egress.
+    network_mode: "container:${VPN_CONTAINER_NAME:-gluetun}"
     env_file:
       - path: .env
         required: false
     environment:
-      - DB_FILE=/data/data.db
-      - YTDLP_COOKIES=/app/cookies.txt
-      - YTMUSIC_AUTH_FILE=/data/headers_auth.json
-      #should use by default
-      # - YT_BROWSER_SERVICE_URL=http://youtube-browser:8765
-      #should only use if vpn is connected
-      - YT_BROWSER_SERVICE_URL=http://127.0.0.1:8765
-      - YT_BROWSER_CONTROL_TOKEN=${YT_BROWSER_CONTROL_TOKEN:?set YT_BROWSER_CONTROL_TOKEN in .env}
-      - ALEXA_PROXY_BEHIND_CADDY=1
+      JUKES_DB_PATH: ${JUKES_DB_PATH:-/data/jukes.sqlite3}
+      JUKES_AUDIO_DIR: ${JUKES_AUDIO_DIR:-/tmp/ytm_audio_cache}
+      JUKES_REQUESTED_CACHE_LIMIT_BYTES: ${JUKES_REQUESTED_CACHE_LIMIT_BYTES:-10000000000}
+      JUKES_WARMUP_CACHE_LIMIT_BYTES: ${JUKES_WARMUP_CACHE_LIMIT_BYTES:-1000000000}
+      JUKES_WARMUP_TTL_SECONDS: ${JUKES_WARMUP_TTL_SECONDS:-7200}
+      JUKES_MIN_FREE_DISK_BYTES: ${JUKES_MIN_FREE_DISK_BYTES:-2000000000}
+      JUKES_ADMIN_PASSWORD_HASH: ${JUKES_ADMIN_PASSWORD_HASH:-}
+      JUKES_ADMIN_SESSION_KEY: ${JUKES_ADMIN_SESSION_KEY:-}
+      JUKES_CREDENTIAL_ENCRYPTION_KEY: ${JUKES_CREDENTIAL_ENCRYPTION_KEY:-}
+      JUKES_TRUSTED_PROXY_CIDRS: ${JUKES_TRUSTED_PROXY_CIDRS:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost}
+      YT_BROWSER_SERVICE_URL: ${YT_BROWSER_SERVICE_URL:-http://127.0.0.1:8765}
+      YT_BROWSER_CONTROL_TOKEN: ${YT_BROWSER_CONTROL_TOKEN:?set YT_BROWSER_CONTROL_TOKEN in private .env}
+      YT_BROWSER_CAPTURE_TIMEOUT: ${YT_BROWSER_CAPTURE_TIMEOUT:-120}
+      YT_BROWSER_LOGIN_TIMEOUT: ${YT_BROWSER_LOGIN_TIMEOUT:-240}
+      YT_BROWSER_SUCCESS_DISPLAY: ${YT_BROWSER_SUCCESS_DISPLAY:-12}
+      YT_BROWSER_SCREEN_GEOMETRY: ${YT_BROWSER_SCREEN_GEOMETRY:-1365x768x24}
+      YTDLP_BGUTIL_BASE_URL: ${YTDLP_BGUTIL_BASE_URL:-http://bgutil-provider:4416}
+      YTDLP_JS_RUNTIME: ${YTDLP_JS_RUNTIME:-deno}
     volumes:
-      # cookies.txt is provisioned separately in the project root and is
-      # gitignored; expose that exact file to yt-dlp inside the container.
-      - ./cookies.txt:/app/cookies.txt:ro
-      - ytmusic_cache:/tmp/ytm_audio_cache
+      # Keep the existing app data and audio volumes attached. The new database
+      # lives beside the untouched legacy /data/data.db.
       - ytmusic_data:/data
-      # Amazon/Alexa login session cookie (see alexa_remote.py ALEXA_COOKIE_DIR).
-      # Without this volume, every rebuild/restart wipes it and forces a fresh
-      # Amazon login.
-      - ytmusic_alexa_cookies:/app/alexa_cookies
-  # should use when the vpn is not connected
-    # networks:
-    #   - web  
-    depends_on:
-      youtube-browser:
-        condition: service_healthy
+      - ytmusic_cache:/tmp/ytm_audio_cache
+      # Optional legacy-cookie migration mount (temporary, read-only):
+      # - ./cookies.txt:/run/secrets/legacy-ytdlp-cookies.txt:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health/live', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
 
   youtube-browser:
     build: ./browser-auth
     container_name: youtube-browser
     restart: unless-stopped
-    #shouldnt use normally when the vps is not connected
-    network_mode: "container:gluetun"
+    network_mode: "container:${VPN_CONTAINER_NAME:-gluetun}"
     environment:
-      - YT_BROWSER_CONTROL_TOKEN=${YT_BROWSER_CONTROL_TOKEN:?set YT_BROWSER_CONTROL_TOKEN in .env}
-      - YT_BROWSER_CAPTURE_TIMEOUT=${YT_BROWSER_CAPTURE_TIMEOUT:-120}
-      - YT_BROWSER_LOGIN_TIMEOUT=${YT_BROWSER_LOGIN_TIMEOUT:-240}
-      - YT_BROWSER_SUCCESS_DISPLAY=${YT_BROWSER_SUCCESS_DISPLAY:-12}
-      - SCREEN_GEOMETRY=${YT_BROWSER_SCREEN_GEOMETRY:-1365x768x24}
+      YT_BROWSER_CONTROL_TOKEN: ${YT_BROWSER_CONTROL_TOKEN:?set YT_BROWSER_CONTROL_TOKEN in private .env}
+      YT_BROWSER_CAPTURE_TIMEOUT: ${YT_BROWSER_CAPTURE_TIMEOUT:-120}
+      YT_BROWSER_LOGIN_TIMEOUT: ${YT_BROWSER_LOGIN_TIMEOUT:-240}
+      YT_BROWSER_SUCCESS_DISPLAY: ${YT_BROWSER_SUCCESS_DISPLAY:-12}
+      SCREEN_GEOMETRY: ${YT_BROWSER_SCREEN_GEOMETRY:-1365x768x24}
     volumes:
       - ytmusic_chromium_profile:/profile
-      #shouldnt use when vpn is being used
-    # networks:
-    #   - web  
     shm_size: 512mb
 
   caddy:
@@ -59,28 +68,27 @@ services:
     container_name: caddy
     restart: unless-stopped
     environment:
-      - SITE_ADDRESS=${SITE_ADDRESS:-localhost}
+      SITE_ADDRESS: ${SITE_ADDRESS:-localhost}
+      GLUETUN_ALIAS: ${GLUETUN_ALIAS:-gluetun}
+      CADDY_TRUSTED_PROXY_CONFIG: ${CADDY_TRUSTED_PROXY_CONFIG:-}
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     networks:
       - web
-      #should only use if proxy is using else comment out
-    depends_on:
-      - ytmusic
 
 networks:
   web:
+    external: true
     name: web
 
 volumes:
   ytmusic_cache:
   ytmusic_data:
-  ytmusic_alexa_cookies:
   ytmusic_chromium_profile:
   caddy_data:
   caddy_config:

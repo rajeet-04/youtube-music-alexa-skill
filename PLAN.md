@@ -12,6 +12,10 @@ the monolithic player backend with focused music, cache, job and credential
 services. SQLite persists lifecycle state; a single process owns the download
 coordinator and a bounded worker pool. All audio endpoints share that coordinator.
 
+**Tooling:** Use uv for Python dependency management and Bun for JavaScript/CLI
+packages; the user explicitly selected these over pip/npm. System utilities
+(Docker/Compose, FFmpeg) remain OS packages.
+
 **Tech Stack:** Python 3.12, Flask, Waitress, SQLite, ytmusicapi, yt-dlp, Deno,
 FFmpeg, Chromium/noVNC, Docker Compose and Caddy. Add `cryptography` for authenticated
 credential encryption. Keep existing extractor versions initially.

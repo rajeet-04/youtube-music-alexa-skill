@@ -11,6 +11,8 @@ from .cache import Cache
 from .config import CacheConfig
 from .credentials import Credentials
 from .extractor import Extractor
+from .guard import acquire_exclusive
+from .health import register_health
 from .identity import Identity
 from .jobs import Jobs
 from .limits import RateLimiter, client_address, parse_networks
@@ -47,7 +49,9 @@ def _cookie_probe(cookie_header: str) -> bool:
 
 
 def build_services(config: CacheConfig | None = None) -> Services:
-    cache = Cache(config or cache_config_from_env())
+    config = config or cache_config_from_env()
+    acquire_exclusive(config.database_path)
+    cache = Cache(config)
     key = os.environ.get("JUKES_CREDENTIAL_ENCRYPTION_KEY", "").strip() or None
     # Personalisation and admin cookies fail closed without a persistent key: no
     # token is issued, nothing is stored, and a missing key never causes a new
@@ -83,6 +87,7 @@ def create_app(config: Settings | None = None, services: Services | None = None,
     services = services or build_services()
     app.extensions["jukes"] = services
     register_routes(app, services, settings)
+    register_health(app, services)
 
     if admin is None:
         admin = AdminConfig(

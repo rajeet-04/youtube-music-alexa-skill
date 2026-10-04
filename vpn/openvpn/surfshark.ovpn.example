@@ -1,0 +1,7 @@
+# Copy to surfshark.ovpn: download the India .ovpn from the Surfshark dashboard
+# (Manual setup -> OpenVPN). Credentials go in .env (OPENVPN_USER/OPENVPN_PASSWORD),
+# not in this file. This example holds NO real config.
+client
+dev tun
+proto udp
+remote <in-server-hostname> 1194
