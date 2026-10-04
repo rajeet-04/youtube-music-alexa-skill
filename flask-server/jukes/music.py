@@ -262,23 +262,19 @@ class Music:
         return track
 
     def _by_video_id(self, client: Any, video_id: str) -> Track:
+        # The watch ("next") endpoint returns music metadata including the album and
+        # is not bot-challenged like the player endpoint that get_song uses.
         try:
-            info = client.get_song(video_id)
+            data = client.get_watch_playlist(videoId=video_id, limit=1)
         except Exception as error:  # noqa: BLE001
+            if "no content" in str(error).lower():
+                raise NoMatch("video not found") from None
             raise UpstreamError("metadata lookup failed") from error
-        details = (info or {}).get("videoDetails") if isinstance(info, dict) else None
-        status = ((info or {}).get("playabilityStatus") or {}).get("status") if isinstance(info, dict) else None
-        if not details or details.get("videoId") not in (None, video_id) or status not in (None, "OK"):
+        tracks = (data or {}).get("tracks") if isinstance(data, dict) else None
+        item = tracks[0] if tracks and isinstance(tracks[0], dict) else None
+        if item is None or item.get("videoId") != video_id:
             raise NoMatch("video not found")
-        author = _clean_artist(details.get("author"))
-        return Track(
-            video_id=video_id,
-            title=str(details.get("title") or ""),
-            artists=(author,) if author else (),
-            album=None,
-            duration_ms=_duration_ms(details),
-            artwork_url=_artwork((details.get("thumbnail") or {}).get("thumbnails")),
-        )
+        return self._track(item)
 
     def _search(self, client: Any, query: str) -> list[dict[str, Any]]:
         try:

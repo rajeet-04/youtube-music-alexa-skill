@@ -47,14 +47,14 @@ class FakeYT:
         self.fail = False
         self.items = []
 
-    def get_song(self, video_id):
+    def get_watch_playlist(self, videoId, limit=1, radio=False):
         if self.fail:
             raise RuntimeError("boom")
-        if video_id == "zzzzzzzzzzz":
-            return {"playabilityStatus": {"status": "ERROR"}}
-        return {"playabilityStatus": {"status": "OK"}, "videoDetails": {
-            "videoId": video_id, "title": "Song", "author": "Band - Topic", "lengthSeconds": "210",
-            "thumbnail": {"thumbnails": [{"url": "http://img/s"}, {"url": "http://img/l"}]}}}
+        if videoId == "zzzzzzzzzzz":
+            raise RuntimeError("No content returned by the server.")
+        return {"tracks": [{
+            "videoId": videoId, "title": "Song", "artists": [{"name": "Band - Topic"}], "album": None,
+            "length": "3:30", "thumbnail": [{"url": "http://img/s"}, {"url": "http://img/l"}]}]}
 
     def search(self, query, filter=None, limit=None, ignore_spelling=False):
         self.searches.append(query)

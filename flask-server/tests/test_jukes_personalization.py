@@ -303,8 +303,8 @@ def test_public_and_personalised_requests_share_one_audio_job(env):
             return DownloadResult(destination.path, 58, "mp4", "audio/mp4", 1.0, "aac", "default")
 
     env.services.jobs.extractor = Quick()
-    env.services.music = Music(lambda ctx: type("C", (), {"get_song": lambda s, v: {"videoDetails": {
-        "videoId": v, "title": "T", "author": "A", "lengthSeconds": "5"}}})())
+    env.services.music = Music(lambda ctx: type("C", (), {"get_watch_playlist": lambda s, videoId, limit=1, radio=False: {"tracks": [{
+        "videoId": videoId, "title": "T", "artists": [{"name": "A"}], "length": "0:05"}]}})())
     token = issue(env)
     connect(env, token)
     app = create_app(Settings(), env.services)
