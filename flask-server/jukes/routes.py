@@ -9,7 +9,13 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from flask import Flask, Response, jsonify, request, send_file
 
+from .credentials import (
+    CredentialDecryptionError, CredentialValidationError, InstallationNotFound, InvalidCredentialBundle,
+    MissingCredentialKey,
+)
+from .identity import InvalidInstallationToken
 from .jobs import Job, JobQueueFull
+from .limits import RateLimiter, client_address
 from .models import AudioKey, CacheCapacityError
 from .music import (
     VIDEO_ID_RE, ANONYMOUS, MusicError, Track, TrackSelector, UserContext,
@@ -53,6 +59,10 @@ class Services:
     cache: Any
     jobs: Any
     music: Any
+    identity: Any = None
+    credentials: Any = None
+    limiter: Any = None
+    # Optional hook for admin/readiness code; routes themselves use identity/credentials.
     context_provider: Callable[[str], UserContext] | None = None
 
 
@@ -60,6 +70,12 @@ class Services:
 class Settings:
     legacy_wait_seconds: float = 25.0
     public_base_url: str = ""
+    trusted_proxies: tuple = ()
+    warmup_per_minute: int = 30
+    requested_per_minute: int = 60
+    poll_per_minute: int = 120
+    issue_per_minute: int = 5
+    http_per_minute: int = 600
 
 
 def error_response(status: int, code: str, message: str, retryable: bool = False,
@@ -142,22 +158,61 @@ class LeaseIterator:
 
 def register_routes(app: Flask, services: Services, settings: Settings) -> None:
     cache, jobs, music = services.cache, services.jobs, services.music
+    limiter = services.limiter or RateLimiter()
+    app.extensions["jukes_limiter"] = limiter
+
+    def caller() -> str:
+        return client_address(
+            request.remote_addr,
+            {"cf": request.headers.get("CF-Connecting-IP"), "xff": request.headers.get("X-Forwarded-For")},
+            settings.trusted_proxies,
+        )
+
+    def throttle(bucket: str, limit: int) -> None:
+        wait = limiter.check(bucket, caller(), limit)
+        if wait:
+            raise ApiError(429, "rate_limited", "too many requests", True, str(wait))
+
+    def bearer() -> str | None:
+        header = request.headers.get("Authorization")
+        if header is None:
+            return None
+        scheme, _, token = header.partition(" ")
+        if scheme.lower() != "bearer" or not token.strip():
+            raise ApiError(401, "invalid_token", "invalid installation token")
+        return token.strip()
+
+    def personalization_enabled() -> None:
+        if services.identity is None or services.credentials is None:
+            raise ApiError(503, "personalization_unavailable", "personalisation is not configured", True)
+
+    def installation():
+        """Authenticate the bearer token for /v1/me routes (token required)."""
+        personalization_enabled()
+        token = bearer()
+        if token is None:
+            raise ApiError(401, "invalid_token", "installation token required")
+        try:
+            return services.identity.authenticate(token)
+        except InvalidInstallationToken:
+            raise ApiError(401, "invalid_token", "invalid installation token") from None
 
     # -- helpers -------------------------------------------------------
     def base_url() -> str:
         return (settings.public_base_url or request.url_root).rstrip("/")
 
     def context() -> UserContext:
-        header = request.headers.get("Authorization")
-        if header is None:
+        token = bearer()
+        if token is None:
             return ANONYMOUS
-        scheme, _, token = header.partition(" ")
-        if scheme.lower() != "bearer" or not token.strip() or services.context_provider is None:
+        if services.identity is None:
             raise ApiError(401, "invalid_token", "invalid installation token")
         try:
-            return services.context_provider(token.strip())
-        except InvalidToken:
+            inst = services.identity.authenticate(token)
+        except InvalidInstallationToken:
             raise ApiError(401, "invalid_token", "invalid installation token") from None
+        status = services.credentials.status(inst.installation_id) if services.credentials else None
+        return music.context(inst.installation_id, status)
 
     def selector_from_body() -> TrackSelector:
         body = request.get_json(silent=True)
@@ -264,10 +319,17 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
 
     # -- versioned API -------------------------------------------------
     def start(requested: bool):
+        throttle("http", settings.http_per_minute)
         ctx = context()
         selector = selector_from_body()
         track = resolve(selector, ctx)
-        job = submit(AudioKey(track.video_id, AUDIO_POLICY), requested)
+        key = AudioKey(track.video_id, AUDIO_POLICY)
+        if not jobs.has_active(key) and cache.lookup(key) is None:  # only genuinely new work
+            if requested:
+                throttle("requested", settings.requested_per_minute)
+            else:
+                throttle("warmup", settings.warmup_per_minute)
+        job = submit(key, requested)
         body = {**track.as_dict(), **job_view(job), "personalization_status": ctx.personalization_status}
         response = jsonify(body)
         response.status_code = 200 if job.status == "ready" else 202
@@ -283,6 +345,7 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
 
     @app.get("/v1/jobs/<job_id>")
     def job_status(job_id: str):
+        throttle("poll", settings.poll_per_minute)
         job = jobs.get(job_id) if re.fullmatch(r"[0-9a-f]{32}|[\w-]{1,64}", job_id) else None
         if job is None:
             raise ApiError(404, "job_not_found", "unknown job")
@@ -308,6 +371,84 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
         if job.status == "failed":
             raise job_error(job)
         raise ApiError(503, "pending", "audio is being prepared", True)
+
+    # -- installations and optional personalisation --------------------
+    @app.post("/v1/installations")
+    def issue_installation():
+        personalization_enabled()
+        throttle("issue", settings.issue_per_minute)
+        response = jsonify({"token": services.identity.issue()})
+        response.status_code = 201
+        return response
+
+    def connection_view(status) -> dict[str, Any]:
+        view = {"connected": bool(status.connected)}
+        if status.connected:
+            view["credential_generation"] = status.credential_generation
+            view["connected_at"] = status.connected_at
+        return view
+
+    @app.put("/v1/me/youtube")
+    def connect_youtube():
+        throttle("http", settings.http_per_minute)
+        inst = installation()
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            raise ApiError(400, "invalid_request", "expected a JSON object")
+        try:
+            status = services.credentials.replace(inst.installation_id, body)
+        except InvalidCredentialBundle as error:
+            raise ApiError(400, "invalid_request", str(error)) from None
+        except MissingCredentialKey:
+            raise ApiError(503, "personalization_unavailable", "credential storage is not configured", True) from None
+        except CredentialDecryptionError:
+            raise ApiError(503, "credential_store_error", "stored credentials are unreadable", True) from None
+        except CredentialValidationError as error:
+            if error.retryable:
+                raise ApiError(502, "upstream_error", "YouTube account validation failed", True) from None
+            raise ApiError(422, "session_rejected", "YouTube session was not accepted") from None
+        except InstallationNotFound:
+            raise ApiError(401, "invalid_token", "invalid installation token") from None
+        return jsonify(connection_view(status))
+
+    @app.get("/v1/me/youtube")
+    def youtube_status():
+        throttle("poll", settings.poll_per_minute)
+        inst = installation()
+        return jsonify(connection_view(services.credentials.status(inst.installation_id)))
+
+    @app.delete("/v1/me/youtube")
+    def disconnect_youtube():
+        inst = installation()
+        services.credentials.delete(inst.installation_id)
+        return Response(status=204)
+
+    @app.delete("/v1/me")
+    def delete_me():
+        inst = installation()
+        services.credentials.delete(inst.installation_id)
+        services.identity.revoke(inst.installation_id)
+        return Response(status=204)
+
+    @app.post("/v1/recommendations")
+    def recommendations():
+        throttle("http", settings.http_per_minute)
+        ctx = context()
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or set(body) - {"video_id", "limit"}:
+            raise ApiError(400, "invalid_request", "expected video_id and optional limit")
+        video_id, limit = body.get("video_id"), body.get("limit", 25)
+        if not isinstance(video_id, str) or not VIDEO_ID_RE.match(video_id):
+            raise ApiError(400, "invalid_request", "video_id must be an 11-character id")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ApiError(400, "invalid_request", "limit must be an integer from 1 to 100")
+        try:
+            result = music.radio(video_id, limit, ctx)
+        except MusicError as error:
+            raise ApiError(MUSIC_STATUS.get(error.code, 502), error.code, str(error), error.retryable) from None
+        response = jsonify({"video_id": video_id, "tracks": [t.as_dict() for t in result.tracks],
+                            "personalization_status": result.personalization_status})
+        return response
 
     # -- legacy /audio/ ------------------------------------------------
     @app.route("/audio/", methods=["GET", "HEAD"])

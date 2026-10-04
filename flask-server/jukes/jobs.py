@@ -237,6 +237,12 @@ class Jobs:
             return None
         return job
 
+    def has_active(self, key: AudioKey) -> bool:
+        """True while a queued or running job already covers ``key``."""
+        with self._cond:
+            job = self._jobs.get(self._by_key.get(key, ""))
+            return job is not None and job.status in ACTIVE
+
     def get(self, job_id: str) -> Job | None:
         with self._cond:
             if job_id not in self._jobs:

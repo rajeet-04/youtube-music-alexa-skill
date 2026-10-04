@@ -10,7 +10,11 @@ from .cache import Cache
 from .config import CacheConfig
 from .extractor import Extractor
 from .jobs import Jobs
-from .music import Music, UserContext
+from .credentials import Credentials
+from .identity import Identity
+from .limits import parse_networks
+from .music import Music
+from .personalization import ClientFactory, account_probe
 from .routes import Services, Settings, register_routes
 
 MAX_BODY_BYTES = 1_000_000
@@ -36,12 +40,6 @@ def cache_config_from_env() -> CacheConfig:
     )
 
 
-def _anonymous_ytmusic(context: UserContext):
-    from ytmusicapi import YTMusic  # imported lazily so tests need no network library
-
-    return YTMusic(language="en", location=context.region)
-
-
 def build_services(config: CacheConfig | None = None) -> Services:
     cache = Cache(config or cache_config_from_env())
     jobs = Jobs(
@@ -49,7 +47,18 @@ def build_services(config: CacheConfig | None = None) -> Services:
         worker_count=_int_env("JUKES_WORKERS", 4),
         max_queue_size=_int_env("JUKES_QUEUE_SIZE", 100),
     )
-    return Services(cache=cache, jobs=jobs, music=Music(_anonymous_ytmusic))
+    # Personalisation fails closed: without a persistent key no token can be
+    # issued and no session stored, and a missing key never causes a new one
+    # to be generated over existing ciphertext.
+    key = os.environ.get("JUKES_CREDENTIAL_KEY", "").strip() or None
+    identity = credentials = None
+    if key:
+        identity = Identity(cache.store)
+        credentials = Credentials(cache.store, key, account_probe=account_probe)
+    return Services(
+        cache=cache, jobs=jobs, music=Music(ClientFactory(credentials)),
+        identity=identity, credentials=credentials,
+    )
 
 
 def create_app(config: Settings | None = None, services: Services | None = None) -> Flask:
@@ -58,6 +67,7 @@ def create_app(config: Settings | None = None, services: Services | None = None)
     settings = config or Settings(
         legacy_wait_seconds=float(os.environ.get("JUKES_LEGACY_WAIT_SECONDS", 25)),
         public_base_url=os.environ.get("PUBLIC_BASE_URL", ""),
+        trusted_proxies=parse_networks(os.environ.get("JUKES_TRUSTED_PROXIES", "").split(",")),
     )
     services = services or build_services()
     app.extensions["jukes"] = services

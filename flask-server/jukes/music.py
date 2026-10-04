@@ -139,7 +139,7 @@ def _duration_ms(item: dict[str, Any]) -> int | None:
             continue
         if seconds > 0:
             return seconds * 1000
-    text = item.get("duration")
+    text = item.get("duration") or item.get("length")
     if isinstance(text, str):
         try:
             seconds = 0
@@ -153,6 +153,18 @@ def _duration_ms(item: dict[str, Any]) -> int | None:
 
 def duration_tolerance_ms(target_ms: int) -> float:
     return max(8_000.0, target_ms * 0.07)
+
+
+@dataclass(frozen=True)
+class RadioResult:
+    tracks: tuple[Track, ...]
+    personalization_status: str
+
+
+def _is_auth_error(error: BaseException) -> bool:
+    text = f"{type(error).__name__} {error}".lower()
+    return any(token in text for token in (
+        "401", "403", "unauthor", "forbidden", "authenticat", "logged out", "login", "sign in", "cookie"))
 
 
 class Music:
@@ -191,6 +203,46 @@ class Music:
             self._cache.move_to_end(key)
             while len(self._cache) > self._cache_size:
                 self._cache.popitem(last=False)
+
+    # -- personalisation -----------------------------------------------
+    @staticmethod
+    def context(installation_id: str | None, status: Any = None) -> UserContext:
+        """UserContext for an installation; ``status`` is a ``ConnectionStatus``."""
+        if installation_id is None:
+            return ANONYMOUS
+        connected = bool(status is not None and status.connected)
+        return UserContext(
+            installation_id=installation_id,
+            generation=int(getattr(status, "credential_generation", 0) or 0),
+            personalization_status="connected" if connected else "anonymous",
+        )
+
+    def radio(self, video_id: str, limit: int, context: UserContext = ANONYMOUS) -> RadioResult:
+        """Ordered radio for ``video_id``; expired sessions fall back to anonymous.
+
+        Filtering, dedup and queue reseeding stay in the app's own engine.
+        """
+        status = context.personalization_status
+        attempts = [context] if context.personalization_status == "connected" else []
+        attempts.append(ANONYMOUS)
+        last: BaseException | None = None
+        for attempt in attempts:
+            try:
+                client = self._client_factory(attempt)
+                data = client.get_watch_playlist(videoId=video_id, radio=True, limit=limit)
+            except Exception as error:  # noqa: BLE001
+                last = error
+                if attempt is not ANONYMOUS:
+                    status = "reconnect_required" if _is_auth_error(error) else "personalization_unavailable"
+                continue
+            tracks = []
+            for item in (data or {}).get("tracks") or []:
+                if isinstance(item, dict) and VIDEO_ID_RE.match(str(item.get("videoId") or "")):
+                    tracks.append(self._track(item))
+            if attempt is ANONYMOUS and status == "connected":
+                status = "anonymous"
+            return RadioResult(tuple(tracks[:limit]), status)
+        raise UpstreamError("radio lookup failed") from last
 
     # -- resolution ----------------------------------------------------
     def resolve(self, selector: TrackSelector, context: UserContext = ANONYMOUS) -> Track:
@@ -244,7 +296,7 @@ class Music:
             artists=_artists(item),
             album=(album.get("name") or None) if isinstance(album, dict) else None,
             duration_ms=_duration_ms(item),
-            artwork_url=_artwork(item.get("thumbnails")),
+            artwork_url=_artwork(item.get("thumbnails") or item.get("thumbnail")),
         )
 
     def _by_query(self, client: Any, selector: TrackSelector) -> Track:
