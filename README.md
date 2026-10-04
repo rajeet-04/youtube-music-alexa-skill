@@ -19,7 +19,7 @@ runtime has been removed. Git history keeps it.)
 - **Admin** (`/admin/`): download-cookie upload/paste, interactive YouTube
   sign-in in a private browser, pool/job status.
 
-API reference for the app: [`docs/JUKES_API.md`](docs/JUKES_API.md).
+App handbook: [`docs/JUKES_APP_HANDBOOK.md`](docs/JUKES_APP_HANDBOOK.md). API reference: [`docs/JUKES_API.md`](docs/JUKES_API.md).
 Deployment: [`SETUP-DOCKER.md`](SETUP-DOCKER.md). Plan and decisions: [`PLAN.md`](PLAN.md).
 
 ## Layout
