@@ -23,8 +23,12 @@ credential encryption. Keep existing extractor versions initially.
 **Spec:** The approved design in this document. External deployment and app
 sign-in are verification dependencies, not promises of working behaviour.
 
-**Status:** Final planning draft, 2026-10-04. Feature scope is approved. No backend
-code, running services, credentials, or JUKES app code have been modified.
+**Status:** Implemented 2026-10-04 on branch `feat/jukes-backend` (Tasks 1-7). 166 backend
+tests + 7 browser-sidecar tests pass. Verified live from this host: metadata
+resolution, radio, health, admin fail-closed. NOT verified: audio extraction (this
+host's IP is bot-challenged; needs the India VPN, bgutil provider and/or cookies),
+Docker image build (no daemon access here), Surfshark/Gluetun, Cloudflare, Android
+playback. See SETUP-DOCKER.md "What you still need to provide".
 
 **References:** Backend baseline `27bdee94916852bfaa8236a0b96099c28c06d443`;
 JUKES beta `8315b553978244583b10da7bcd49b361685c72c8`
