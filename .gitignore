@@ -31,3 +31,4 @@ vpn/wireguard/*.conf
 vpn/openvpn/*.ovpn
 !vpn/openvpn/*.example
 node_modules/
+**/download_cookies.txt
