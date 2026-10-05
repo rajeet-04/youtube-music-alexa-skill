@@ -327,6 +327,11 @@ def test_job_cookie_files_are_unique_private_and_removed(env):
             return 0
 
     def factory(args, **kw):
+        if any("web_embedded" in a for a in args):  # anonymous first attempt fails; cookie-aware default runs
+            return type("F", (P,), {"__init__": lambda self, a: (setattr(self, "stdout", io.BytesIO(b"")),
+                                    setattr(self, "stderr", io.BytesIO(b"ERROR: blocked")),
+                                    setattr(self, "returncode", 1), setattr(self, "pid", 2)) and None,
+                                    "wait": lambda self, timeout=None: 1})(args)
         if "--cookies" in args:
             path = Path(args[args.index("--cookies") + 1])
             jar_paths.append(path)

@@ -75,7 +75,7 @@ def test_ytdlp_client_order_and_current_compatible_format_policy(monkeypatch, ca
 
     def process_factory(args, **kwargs):
         commands.append(list(args))
-        if len(commands) == 1:
+        if len(commands) <= 2:  # web_embedded and default fail; android_vr succeeds
             return FakeProcess(args, payload=b"partial", stderr=b"ERROR: client blocked", returncode=1)
         return FakeProcess(args, payload=b"valid-audio")
 
@@ -99,14 +99,15 @@ def test_ytdlp_client_order_and_current_compatible_format_policy(monkeypatch, ca
 
     assert [command[command.index("--extractor-args") + 1].split("=")[-1]
             if "--extractor-args" in command else "default" for command in commands] == [
-        "default", "android_vr"
+        "web_embedded", "default", "android_vr"
     ]
     assert "140/bestaudio[ext=m4a]/bestaudio/best" in commands[0]
     assert "--remote-components" in commands[0]
     assert "ejs:github" in commands[0]
     assert "--js-runtimes" in commands[0]
-    assert "--cookies" in commands[0]
-    assert "--cookies" not in commands[1]
+    assert "--cookies" not in commands[0]  # web_embedded is tried anonymously first
+    assert "--cookies" in commands[1]      # default is cookie-aware
+    assert "--cookies" not in commands[2]  # android_vr is cookie-free
     assert "--extractor-args" in commands[0]
     assert result.mime_type == "audio/mp4"
     assert result.media_format == "mp4"
@@ -119,6 +120,8 @@ def test_cookie_snapshot_path_is_unique_private_and_removed_after_download(monke
     cookie_contents = []
 
     def process_factory(args, **kwargs):
+        if any("web_embedded" in a for a in args):  # anonymous first attempt fails; cookie-aware default runs
+            return FakeProcess(args, payload=b"", stderr=b"ERROR: blocked", returncode=1)
         if "--cookies" in args:
             path = Path(args[args.index("--cookies") + 1])
             cookie_paths.append(path)

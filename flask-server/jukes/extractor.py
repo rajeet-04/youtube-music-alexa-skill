@@ -24,10 +24,12 @@ from .models import AudioKey, CacheCapacityError
 
 log = logging.getLogger(__name__)
 
-# Mirrors the legacy fallback order: cookie-aware default first, android_vr
-# (cookie-free, can expose AAC/M4A) second, then web and tv.
-CLIENT_ORDER = ("default", "android_vr", "web", "tv")
-COOKIELESS_CLIENTS = {"android_vr", "ios"}
+# web_embedded goes first and without cookies: on the deployed VPN host it is the only
+# client that currently downloads public m4a anonymously (android_vr/mweb return 403,
+# tv/default with rotated account cookies fail with "page needs to be reloaded").
+# The legacy fallbacks follow: default (cookie-aware), android_vr, web, tv.
+CLIENT_ORDER = ("web_embedded", "default", "android_vr", "web", "tv")
+COOKIELESS_CLIENTS = {"web_embedded", "android_vr", "ios"}
 FORMAT_SELECTOR = "140/bestaudio[ext=m4a]/bestaudio/best"
 CHUNK_BYTES = 256 * 1024
 STDERR_LIMIT = 16 * 1024
