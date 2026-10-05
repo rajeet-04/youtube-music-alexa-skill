@@ -27,3 +27,12 @@ Surfshark WireGuard files for several locations can sit side by side; `VPN_PROFI
 selects which one is mounted as Gluetun's `wg0.conf`. Keep them `chmod 600`. Only
 use India (`in-*`) profiles for this service; switching `VPN_PROFILE` and recreating
 the `gluetun` container changes the exit.
+
+## Required before first start
+
+```bash
+scripts/prepare-vpn.sh      # resolves the Endpoint hostname to an IP (Gluetun requires an IP)
+```
+
+Re-run it after changing `VPN_PROFILE` or if the connection stops working (server IPs can change),
+then `docker compose ... up -d --force-recreate gluetun`.

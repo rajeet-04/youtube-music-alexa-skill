@@ -210,6 +210,7 @@ continue to resolve to the same Docker volumes.
 Use your existing Gluetun, or let this repository run one:
 
 ```bash
+scripts/prepare-vpn.sh
 docker compose -f docker-compose.yml -f docker-compose.vpn.yml up -d --build
 ```
 
