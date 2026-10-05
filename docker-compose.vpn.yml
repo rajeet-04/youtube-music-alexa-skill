@@ -54,13 +54,28 @@ services:
       start_period: 40s
       retries: 3
 
-  # Attach by service name (not container name) so Compose recreates these whenever
-  # gluetun is recreated; a stale container-ID reference would otherwise fail to start.
-  ytmusic:
+  # PO-token provider for yt-dlp. Runs inside Gluetun's network namespace, so the app
+  # reaches it at 127.0.0.1:4416 (no DNS, no extra Docker network). Version matches the
+  # pinned bgutil-ytdlp-pot-provider plugin. Skip it if you already run your own provider.
+  bgutil-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider:1.3.1
+    restart: unless-stopped
     network_mode: "service:gluetun"
     depends_on:
       gluetun:
         condition: service_healthy
+
+  # Attach by service name (not container name) so Compose recreates these whenever
+  # gluetun is recreated; a stale container-ID reference would otherwise fail to start.
+  ytmusic:
+    network_mode: "service:gluetun"
+    environment:
+      YTDLP_BGUTIL_BASE_URL: ${YTDLP_BGUTIL_BASE_URL_OVERRIDE:-http://127.0.0.1:4416}
+    depends_on:
+      gluetun:
+        condition: service_healthy
+      bgutil-provider:
+        condition: service_started
 
   youtube-browser:
     network_mode: "service:gluetun"

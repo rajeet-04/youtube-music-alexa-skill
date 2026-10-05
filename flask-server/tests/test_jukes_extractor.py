@@ -385,3 +385,18 @@ def test_failure_text_never_includes_secret_bearing_stderr(cache: Cache):
 
     assert "super-secret" not in str(failure.value)
     assert "Cookie" not in str(failure.value)
+
+
+def test_requested_format_error_is_not_classified_as_a_dead_video(cache: Cache):
+    extractor = Extractor(
+        process_factory=lambda args, **kwargs: FakeProcess(
+            args, payload=b"", stderr=b"ERROR: [youtube] x: Requested format is not available.", returncode=1),
+        public_audio_probe=lambda key, timeout: True,
+        media_probe=lambda path: {},
+    )
+    key = AudioKey("fmt-missing", "p")
+    with pytest.raises(ExtractionError) as failure:
+        extractor.download(key, cache.reserve(key, requested=True), None)
+    assert failure.value.code == "extraction_failed"  # not video_unavailable, so no hour-long dead cache
+    from jukes.extractor import _error_hint
+    assert "SID=" not in _error_hint("ERROR: bad Cookie: SID=abc123 failed") and "abc123" not in _error_hint("ERROR: Cookie: SID=abc123")

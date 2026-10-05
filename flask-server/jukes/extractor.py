@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import os
 import shutil
 import signal
@@ -81,8 +82,22 @@ def _cookie_jar_from_header(header: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+_SECRETISH = re.compile(r"(?i)(cookie|sid|token|authorization|apikey|key)[=:\s]+\S+")
+
+
+def _error_hint(text: str) -> str:
+    """One scrubbed yt-dlp ERROR line for operator logs (never part of API responses)."""
+    for line in text.splitlines():
+        if "ERROR" in line:
+            return _SECRETISH.sub(r"\1=<redacted>", line.strip())[:220]
+    return ""
+
+
 def _classify_stderr(text: str) -> str:
     lowered = text.lower()
+    # "Requested format is not available" is a client/PO-token problem, not a dead video.
+    if "requested format" in lowered:
+        return "extraction_failed"
     if "429" in lowered or "too many requests" in lowered or "rate limit" in lowered or "rate-limit" in lowered:
         return "rate_limited"
     if any(token in lowered for token in (
@@ -393,7 +408,7 @@ class Extractor:
         if code != 0:
             text = b"".join(stderr_chunks).decode("utf-8", "replace")
             error_code = _classify_stderr(text)
-            log.warning("yt-dlp %s attempt failed: %s", client, error_code)
+            log.warning("yt-dlp %s attempt failed: %s | %s", client, error_code, _error_hint(text))
             raise ExtractionError(error_code)
         return self._validate(destination, client)
 
