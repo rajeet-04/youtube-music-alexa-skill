@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -206,6 +207,12 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
             # Behind our own proxy/tunnel: honour its scheme and host so a changing
             # *.trycloudflare.com address still yields correct https audio URLs.
             proto = (request.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip()
+            try:  # Cloudflare states the visitor's real scheme even if a hop rewrote X-Forwarded-Proto
+                visitor = json.loads(request.headers.get("CF-Visitor") or "{}").get("scheme")
+            except (ValueError, AttributeError):
+                visitor = None
+            if visitor in ("http", "https"):
+                proto = visitor
             host = (request.headers.get("X-Forwarded-Host") or request.host or "").split(",")[0].strip()
             if proto in ("http", "https") and re.fullmatch(r"[A-Za-z0-9.-]+(:\d{1,5})?", host or ""):
                 return f"{proto}://{host}"

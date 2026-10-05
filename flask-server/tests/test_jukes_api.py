@@ -400,3 +400,15 @@ def test_audio_url_uses_forwarded_scheme_and_host_only_from_trusted_proxy(env):
     assert url(Settings()).startswith("http://localhost")  # untrusted peer cannot choose the host
     assert url(Settings(public_base_url="https://fixed.example", trusted_proxies=parse_networks(["127.0.0.0/8"]))
                ) == f"https://fixed.example/v1/audio/{VID}"
+
+
+def test_audio_url_prefers_cloudflare_visitor_scheme_from_trusted_proxy(env):
+    from jukes.limits import parse_networks
+    prepared(env)
+    hdr = {"X-Forwarded-Proto": "http", "X-Forwarded-Host": "ms.example.test", "CF-Visitor": '{"scheme":"https"}'}
+    app = create_app(Settings(trusted_proxies=parse_networks(["127.0.0.0/8"])), env.app.extensions["jukes"])
+    url = app.test_client().post("/v1/audio/prepare", json={"video_id": VID}, headers=hdr).get_json()["audio_url"]
+    assert url == f"https://ms.example.test/v1/audio/{VID}"
+    bad = dict(hdr, **{"CF-Visitor": "not json"})
+    url = app.test_client().post("/v1/audio/prepare", json={"video_id": VID}, headers=bad).get_json()["audio_url"]
+    assert url.startswith("http://ms.example.test")  # falls back to X-Forwarded-Proto
