@@ -84,7 +84,12 @@ def build_services(config: CacheConfig | None = None) -> Services:
         credential_provider=server_cookies.snapshot if server_cookies else None,
     )
     services = Services(
-        cache=cache, jobs=jobs, music=Music(ClientFactory(credentials)),
+        cache=cache, jobs=jobs, music=Music(
+            ClientFactory(credentials),
+            # A song's match (title/artist/length -> video) rarely changes; repeat prepares skip
+            # the ~1.3 s YouTube Music search for a day.
+            cache_ttl=float(os.environ.get("JUKES_RESOLVE_CACHE_SECONDS", 86400)),
+        ),
         identity=identity, credentials=credentials,
     )
     services.server_cookies = server_cookies
