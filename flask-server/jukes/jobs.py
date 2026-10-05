@@ -59,6 +59,7 @@ class Jobs:
         credential_provider: Callable[[], Any] | None = None,
         autostart: bool = True,
         clock: Callable[[], float] = time.time,
+        on_cookie_suspect: Callable[[], None] | None = None,
     ) -> None:
         self.cache = cache
         self.extractor = extractor
@@ -69,6 +70,7 @@ class Jobs:
         self.max_queue_size = max_queue_size
         self._credential_provider = credential_provider
         self._clock = clock
+        self.on_cookie_suspect = on_cookie_suspect
         self._cond = threading.Condition()
         self._jobs: dict[str, Job] = {}
         self._by_key: dict[AudioKey, str] = {}
@@ -347,6 +349,11 @@ class Jobs:
             self.cache.complete(key, result.path, requested=requested)
         except ExtractionError as error:
             error_code = error.code
+            if error.cookie_suspect and self.on_cookie_suspect is not None:
+                try:
+                    self.on_cookie_suspect()
+                except Exception:  # noqa: BLE001 - a refresh hook must never fail a job
+                    log.exception("cookie refresh hook failed")
         except CacheCapacityError as error:
             error_code = error.code
         except Exception:  # noqa: BLE001 - never surface extractor internals

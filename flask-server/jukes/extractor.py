@@ -46,9 +46,12 @@ _MESSAGES = {
 
 
 class ExtractionError(RuntimeError):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, cookie_suspect: bool = False) -> None:
         super().__init__(_MESSAGES.get(code, "audio extraction failed"))
         self.code = code
+        # True when an attempt that sent account cookies was rejected in a way that points
+        # at stale cookies (not at the video). Used to schedule a rare cookie refresh.
+        self.cookie_suspect = cookie_suspect
 
 
 @dataclass(frozen=True)
@@ -93,6 +96,17 @@ def _error_hint(text: str) -> str:
         if "ERROR" in line:
             return _SECRETISH.sub(r"\1=<redacted>", line.strip())[:220]
     return ""
+
+
+_COOKIE_TROUBLE = (
+    "page needs to be reloaded", "sign in to confirm", "login required", "cookies are no longer valid",
+    "use --cookies", "account cookies",
+)
+
+
+def _cookie_trouble(text: str) -> bool:
+    lowered = text.lower()
+    return any(token in lowered for token in _COOKIE_TROUBLE)
 
 
 def _classify_stderr(text: str) -> str:
@@ -315,6 +329,7 @@ class Extractor:
 
         cookie_path = self._write_cookie_file(credential_snapshot) if has_cookies else None
         last_code = "extraction_failed"
+        suspect = False
         try:
             for client in CLIENT_ORDER:
                 remaining = deadline - time.monotonic()
@@ -326,6 +341,7 @@ class Extractor:
                     return self._attempt(key, destination, client, cookie_path, attempt_timeout)
                 except ExtractionError as error:
                     last_code = error.code
+                    suspect = suspect or error.cookie_suspect
                     if error.code == "rate_limited":
                         self._start_cooldown()
                         raise
@@ -341,7 +357,7 @@ class Extractor:
                     pass
         if last_code == "extraction_failed":
             self._remember(self._flaky, key.video_id, self.flaky_ttl_seconds)
-        raise ExtractionError(last_code)
+        raise ExtractionError(last_code, cookie_suspect=suspect)
 
     @staticmethod
     def _write_cookie_file(snapshot) -> str:
@@ -410,6 +426,10 @@ class Extractor:
         if code != 0:
             text = b"".join(stderr_chunks).decode("utf-8", "replace")
             error_code = _classify_stderr(text)
+            used_cookies = bool(cookie_path) and client not in COOKIELESS_CLIENTS
+            if used_cookies and _cookie_trouble(text):
+                log.warning("yt-dlp %s attempt failed: %s | %s", client, error_code, _error_hint(text))
+                raise ExtractionError(error_code, cookie_suspect=True)
             log.warning("yt-dlp %s attempt failed: %s | %s", client, error_code, _error_hint(text))
             raise ExtractionError(error_code)
         return self._validate(destination, client)

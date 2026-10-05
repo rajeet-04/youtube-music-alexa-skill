@@ -241,6 +241,21 @@ set `YTDLP_BGUTIL_BASE_URL` to its IP on the `web` network.
 
 See `cloudflare/README.md`: add `-f docker-compose.tunnel.yml`, then `scripts/tunnel-url.sh`.
 
+## Saved YouTube session and auto-refresh
+
+Sign in once through the admin noVNC window; the Chromium profile is kept on the
+`ytmusic_chromium_profile` volume. Public songs download without cookies, so the saved
+session is only a fallback. Auto-refresh is deliberately **not** a schedule:
+
+- it contacts YouTube only when a need exists (auth cookies near expiry, or repeated
+  cookie-specific download failures), at random times, never on a fixed interval;
+- no retry loops: a failure waits a random 1-3 days, three failures pause it, and a signed-out
+  profile pauses it immediately (sign in again from `/admin/`; automation never types a password);
+- at most 2 attempts per 24 h, and never while you are using the admin browser;
+- `/admin/` shows its state and has a manual "Refresh from saved profile now" button.
+
+Turn it off with `JUKES_COOKIE_AUTOREFRESH=0`.
+
 ## Cloudflare Wrangler
 
 Wrangler is installed with Bun (`bun install`; pinned in `bun.lock`). It is not

@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import json
 import secrets
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -93,7 +94,7 @@ class BrowserClient:
 
 def make_admin(config: AdminConfig, services, cookies: ServerCookies | None,
                browser: BrowserClient | None, limiter, caller: Callable[[], str],
-               clock: Callable[[], float] = time.time) -> Blueprint:
+               clock: Callable[[], float] = time.time, refresher=None) -> Blueprint:
     bp = Blueprint("jukes_admin", __name__, template_folder="../templates")
     store = services.cache.store
     with store.transaction() as connection:
@@ -223,6 +224,11 @@ def make_admin(config: AdminConfig, services, cookies: ServerCookies | None,
                         "updated_at": cookie_status.updated_at if cookie_status else None},
             "browser_configured": browser is not None,
         }
+        if refresher is not None:
+            r = refresher.state()
+            view["refresh"] = {"needs_attention": r.needs_attention, "reason": r.reason,
+                               "last_success": r.last_success, "last_attempt": r.last_attempt,
+                               "failures": r.failures}
         return view
 
     @bp.get("/admin/")
@@ -261,6 +267,8 @@ def make_admin(config: AdminConfig, services, cookies: ServerCookies | None,
             return deny(503, "cookies_unavailable")
         except CredentialError:
             return _error(503, "cookie_store_error", "stored cookies are unreadable")
+        if refresher is not None:
+            refresher.cookies_changed()  # re-plans from the new cookies' expiry; clears "needs attention"
         return jsonify({"connected": True, "generation": status.generation, "cookie_count": status.cookie_count})
 
     def _error(status: int, code: str, message: str) -> Response:
@@ -278,6 +286,17 @@ def make_admin(config: AdminConfig, services, cookies: ServerCookies | None,
         upload = request.files.get("file")
         text = upload.read(MAX_UPLOAD + 1).decode("utf-8", "replace") if upload else request.form.get("text", "")
         return apply_cookies(text)
+
+    @bp.post("/admin/cookies/refresh")
+    def refresh_cookies_now():
+        """Manual one-off refresh from the saved profile (runs in the background)."""
+        session, error = require_admin(csrf=True)
+        if error:
+            return error
+        if refresher is None or browser is None:
+            return deny(503, "refresh_unavailable")
+        threading.Thread(target=refresher.run_now, daemon=True).start()
+        return Response(status=202)
 
     @bp.post("/admin/cookies/delete")
     def delete_cookies():

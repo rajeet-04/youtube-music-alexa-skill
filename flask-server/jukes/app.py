@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 
 from flask import Flask
 
@@ -18,6 +19,7 @@ from .jobs import Jobs
 from .limits import RateLimiter, client_address, parse_networks
 from .music import Music
 from .personalization import ClientFactory, account_probe
+from .refresher import CookieRefresher
 from .routes import Services, Settings, register_routes
 from .server_cookies import ServerCookies
 
@@ -42,6 +44,20 @@ def cache_config_from_env() -> CacheConfig:
         warmup_ttl_seconds=_int_env("JUKES_WARMUP_TTL_SECONDS", int(defaults.warmup_ttl_seconds)),
         min_free_disk_bytes=_int_env("JUKES_MIN_FREE_DISK_BYTES", defaults.min_free_disk_bytes),
     )
+
+
+def _browser_lease_active(store):
+    """True while the admin holds a live interactive-browser lease (automation stays out of the way)."""
+    def check() -> bool:
+        try:
+            with store.connection() as connection:
+                row = connection.execute(
+                    "SELECT 1 FROM jukes_browser_leases WHERE closed_at IS NULL AND expires_at > ? LIMIT 1",
+                    (time.time(),)).fetchone()
+            return row is not None
+        except Exception:  # noqa: BLE001 - table not created yet
+            return False
+    return check
 
 
 def _cookie_probe(cookie_header: str) -> bool:
@@ -76,7 +92,8 @@ def build_services(config: CacheConfig | None = None) -> Services:
 
 
 def create_app(config: Settings | None = None, services: Services | None = None,
-               admin: AdminConfig | None = None, browser: BrowserClient | None = None) -> Flask:
+               admin: AdminConfig | None = None, browser: BrowserClient | None = None,
+               refresher: CookieRefresher | None = None, autorefresh: bool | None = None) -> Flask:
     app = Flask(__name__, template_folder=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates"))
     app.config["MAX_CONTENT_LENGTH"] = MAX_BODY_BYTES + 64 * 1024  # multipart framing headroom
     settings = config or Settings(
@@ -84,6 +101,7 @@ def create_app(config: Settings | None = None, services: Services | None = None,
         public_base_url=os.environ.get("PUBLIC_BASE_URL", ""),
         trusted_proxies=parse_networks(os.environ.get("JUKES_TRUSTED_PROXY_CIDRS", "").split(",")),
     )
+    default_build = services is None
     services = services or build_services()
     app.extensions["jukes"] = services
     register_routes(app, services, settings)
@@ -108,6 +126,18 @@ def create_app(config: Settings | None = None, services: Services | None = None,
         )
 
     limiter = app.extensions.get("jukes_limiter") or RateLimiter()
-    app.register_blueprint(make_admin(admin, services, getattr(services, "server_cookies", None),
-                                      browser, limiter, caller))
+    server_cookies = getattr(services, "server_cookies", None)
+    if autorefresh is None:
+        autorefresh = default_build and os.environ.get("JUKES_COOKIE_AUTOREFRESH", "1") != "0"
+    if refresher is None and autorefresh and server_cookies is not None and browser is not None:
+        refresher = CookieRefresher(
+            services.cache.store, server_cookies, browser,
+            lease_active=_browser_lease_active(services.cache.store),
+            maintenance_days=float(os.environ.get("JUKES_COOKIE_MAINTENANCE_DAYS", "0") or 0))
+        refresher.start()
+    if refresher is not None:
+        services.jobs.on_cookie_suspect = refresher.request
+        app.extensions["jukes_refresher"] = refresher
+    app.register_blueprint(make_admin(admin, services, server_cookies, browser, limiter, caller,
+                                      refresher=refresher))
     return app

@@ -154,6 +154,23 @@ class ServerCookies:
             return None
         return CredentialSnapshot(cookie_header="", generation=int(row["generation"]), cookie_jar_text=text)
 
+    def earliest_auth_expiry(self) -> float | None:
+        """Soonest expiry (unix seconds) among persistent auth cookies, or None."""
+        snapshot = self.snapshot()
+        if snapshot is None or not snapshot.cookie_jar_text:
+            return None
+        expiries = []
+        for line in snapshot.cookie_jar_text.splitlines():
+            fields = line.split("\t")
+            if len(fields) == 7 and fields[5] in AUTH_COOKIES:
+                try:
+                    value = float(fields[4])
+                except ValueError:
+                    continue
+                if value > 0:
+                    expiries.append(value)
+        return min(expiries) if expiries else None
+
     def clear(self) -> None:
         with self.store.transaction() as connection:
             connection.execute("DELETE FROM jukes_server_cookies WHERE id = 1")

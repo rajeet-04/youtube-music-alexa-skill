@@ -407,3 +407,36 @@ def test_signed_out_capture_returns_a_readable_error(env):
     r = env.client.post("/admin/youtube/browser/export", headers=h)
     body = r.get_json()["error"]
     assert r.status_code == 409 and "Sign in" in body["message"]
+
+
+def test_manual_refresh_endpoint_needs_csrf_and_shows_state(env):
+    import random
+    from jukes.refresher import CookieRefresher
+
+    class Cookies:
+        def status(self):
+            return type("S", (), {"connected": True})()
+
+        def earliest_auth_expiry(self):
+            return None
+
+        def replace(self, jar):
+            pass
+
+    ran = []
+    refresher = CookieRefresher(env.cache.store, Cookies(), env.browser, rng=random.Random(1),
+                                poll_sleep=lambda s: None)
+    refresher.run_now = lambda: ran.append(1) or "ok"
+    app = create_app(Settings(), env.services, env.admin, env.browser, refresher=refresher)
+    c = app.test_client()
+    assert c.post("/admin/cookies/refresh").status_code == 401
+    login(env, c)
+    assert c.post("/admin/cookies/refresh").status_code == 403  # no CSRF
+    token = csrf_of(env, c)
+    assert c.post("/admin/cookies/refresh", headers={"X-CSRF-Token": token}).status_code == 202
+    import time as _t
+    _t.sleep(0.1)
+    assert ran == [1]
+    body = c.get("/admin/api/status").get_json()
+    assert body["refresh"]["needs_attention"] is False
+    assert "Automatic refresh" in c.get("/admin/").get_data(as_text=True)
