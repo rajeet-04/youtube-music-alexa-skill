@@ -75,7 +75,7 @@ def test_ytdlp_client_order_and_current_compatible_format_policy(monkeypatch, ca
 
     def process_factory(args, **kwargs):
         commands.append(list(args))
-        if len(commands) <= 2:  # web_embedded and default fail; android_vr succeeds
+        if len(commands) <= 3:  # tv_simply, web_embedded and default fail; android_vr succeeds
             return FakeProcess(args, payload=b"partial", stderr=b"ERROR: client blocked", returncode=1)
         return FakeProcess(args, payload=b"valid-audio")
 
@@ -99,15 +99,16 @@ def test_ytdlp_client_order_and_current_compatible_format_policy(monkeypatch, ca
 
     assert [command[command.index("--extractor-args") + 1].split("=")[-1]
             if "--extractor-args" in command else "default" for command in commands] == [
-        "web_embedded", "default", "android_vr"
+        "tv_simply", "web_embedded", "default", "android_vr"
     ]
     assert "140/bestaudio[ext=m4a]/bestaudio/best" in commands[0]
     assert "--remote-components" in commands[0]
     assert "ejs:github" in commands[0]
     assert "--js-runtimes" in commands[0]
-    assert "--cookies" not in commands[0]  # web_embedded is tried anonymously first
-    assert "--cookies" in commands[1]      # default is cookie-aware
-    assert "--cookies" not in commands[2]  # android_vr is cookie-free
+    assert "--cookies" not in commands[0]  # tv_simply is tried anonymously first
+    assert "--cookies" not in commands[1]  # then web_embedded, also anonymous
+    assert "--cookies" in commands[2]      # default is cookie-aware
+    assert "--cookies" not in commands[3]  # android_vr is cookie-free
     assert "--extractor-args" in commands[0]
     assert result.mime_type == "audio/mp4"
     assert result.media_format == "mp4"
@@ -120,7 +121,7 @@ def test_cookie_snapshot_path_is_unique_private_and_removed_after_download(monke
     cookie_contents = []
 
     def process_factory(args, **kwargs):
-        if any("web_embedded" in a for a in args):  # anonymous first attempt fails; cookie-aware default runs
+        if any(c in a for a in args for c in ("tv_simply", "web_embedded")):  # anonymous attempts fail; cookie-aware default runs
             return FakeProcess(args, payload=b"", stderr=b"ERROR: blocked", returncode=1)
         if "--cookies" in args:
             path = Path(args[args.index("--cookies") + 1])
@@ -403,3 +404,13 @@ def test_requested_format_error_is_not_classified_as_a_dead_video(cache: Cache):
     assert failure.value.code == "extraction_failed"  # not video_unavailable, so no hour-long dead cache
     from jukes.extractor import _error_hint
     assert "SID=" not in _error_hint("ERROR: bad Cookie: SID=abc123 failed") and "abc123" not in _error_hint("ERROR: Cookie: SID=abc123")
+
+
+def test_client_order_can_be_overridden_without_a_rebuild(monkeypatch):
+    from jukes import extractor as module
+
+    assert module.client_order()[:2] == ("tv_simply", "web_embedded")
+    monkeypatch.setenv("YTDLP_CLIENT_ORDER", " web_embedded , default ")
+    assert module.client_order() == ("web_embedded", "default")
+    monkeypatch.setenv("YTDLP_CLIENT_ORDER", " , ")
+    assert module.client_order() == module.CLIENT_ORDER

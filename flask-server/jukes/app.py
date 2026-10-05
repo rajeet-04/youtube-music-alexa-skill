@@ -98,6 +98,7 @@ def create_app(config: Settings | None = None, services: Services | None = None,
     app.config["MAX_CONTENT_LENGTH"] = MAX_BODY_BYTES + 64 * 1024  # multipart framing headroom
     settings = config or Settings(
         legacy_wait_seconds=float(os.environ.get("JUKES_LEGACY_WAIT_SECONDS", 25)),
+        max_job_wait_seconds=float(os.environ.get("JUKES_MAX_JOB_WAIT_SECONDS", 10)),
         public_base_url=os.environ.get("PUBLIC_BASE_URL", ""),
         trusted_proxies=parse_networks(os.environ.get("JUKES_TRUSTED_PROXY_CIDRS", "").split(",")),
     )

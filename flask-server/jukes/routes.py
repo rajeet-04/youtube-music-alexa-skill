@@ -76,6 +76,7 @@ class Settings:
     warmup_per_minute: int = 30
     requested_per_minute: int = 60
     poll_per_minute: int = 120
+    max_job_wait_seconds: float = 10.0
     issue_per_minute: int = 5
     http_per_minute: int = 600
 
@@ -366,6 +367,11 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
         job = jobs.get(job_id) if re.fullmatch(r"[0-9a-f]{32}|[\w-]{1,64}", job_id) else None
         if job is None:
             raise ApiError(404, "job_not_found", "unknown job")
+        # Long poll: ?wait=<seconds> answers as soon as the job is ready or failed, so a client
+        # learns of a 3 s download at 3 s instead of at its next backoff tick.
+        wait = request.args.get("wait", type=float)
+        if wait and wait > 0 and job.status in ("queued", "downloading"):
+            job = jobs.wait(job_id, min(wait, settings.max_job_wait_seconds)) or job
         return jsonify(job_view(job))
 
     @app.route("/v1/audio/<video_id>", methods=["GET", "HEAD"])

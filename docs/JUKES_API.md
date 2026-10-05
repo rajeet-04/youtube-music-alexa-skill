@@ -64,8 +64,10 @@ chosen track; the backend picks the best match but the app owns the final call.
 ### Polling
 
 `GET /v1/jobs/{job_id}` → `{job_id, video_id, status, pool, audio_url?, error?}`.
-Public: it never contains title/artist or user data. Back off 1 s, 2 s, 3 s, then
-every 3 s; give up after ~2 min. Jobs stay queryable 24 h; an unknown job does
+Public: it never contains title/artist or user data. Add `?wait=<seconds>` to
+long-poll: the server answers as soon as the job is ready or failed, holding the
+request at most `JUKES_MAX_JOB_WAIT_SECONDS` (default 10). Without `wait` (or on an
+older server) back off 1 s, 2 s, 3 s, then every 3 s; give up after ~2 min. Jobs stay queryable 24 h; an unknown job does
 **not** mean the audio was deleted — call prepare again (it is idempotent and free
 when the file is cached). A `failed` job with `retryable: true` may be retried
 with a fresh prepare.

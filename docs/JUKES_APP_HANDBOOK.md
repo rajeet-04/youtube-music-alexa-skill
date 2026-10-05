@@ -15,7 +15,7 @@ state handling, and a test checklist.
 ```
 search/hover ─▶ POST /v1/warmup        (speculative, fire-and-forget)
 tap play     ─▶ POST /v1/audio/prepare ─▶ 200 ready | 202 queued/downloading
-                 │ poll GET /v1/jobs/{id}  (1s,2s,3s,3s… ≤ ~2min)
+                 │ poll GET /v1/jobs/{id}?wait=10  (long poll, ≤ ~2min)
                  ▼
                status=ready ─▶ play audio_url (ExoPlayer, byte ranges)
 ```

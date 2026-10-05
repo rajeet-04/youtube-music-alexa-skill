@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -80,11 +81,12 @@ def env(tmp_path):
     jobs = Jobs(cache, extractor, worker_count=2)
     yt = FakeYT()
     services = Services(cache=cache, jobs=jobs, music=Music(lambda ctx: yt))
-    app = create_app(Settings(legacy_wait_seconds=0.2), services)
+    settings = Settings(legacy_wait_seconds=0.2)
+    app = create_app(settings, services)
     class Env:  # noqa: D401
         pass
     e = Env()
-    e.app, e.cache, e.jobs, e.yt, e.extractor = app, cache, jobs, yt, extractor
+    e.app, e.cache, e.jobs, e.yt, e.extractor, e.settings = app, cache, jobs, yt, extractor, settings
     e.client = app.test_client()
     raw_open = e.client.open
 
@@ -237,6 +239,28 @@ def test_job_status_is_public_and_excludes_user_metadata(env):
     assert r.status_code == 200 and body["status"] == "ready" and body["video_id"] == VID
     assert not ({"title", "artists", "artist", "album", "artwork_url", "personalization_status"} & set(body))
     assert env.client.get("/v1/jobs/nonexistent").status_code == 404
+
+
+
+def test_job_long_poll_answers_when_the_download_finishes(env):
+    env.extractor.gate = threading.Event()
+    job_id = post(env, "/v1/audio/prepare", {"video_id": VID}).get_json()["job_id"]
+    threading.Timer(0.3, env.extractor.gate.set).start()
+    started = time.monotonic()
+    body = env.client.get(f"/v1/jobs/{job_id}?wait=5").get_json()
+    assert body["status"] == "ready" and body["audio_url"].endswith(f"/v1/audio/{VID}")
+    assert time.monotonic() - started < 3
+
+
+def test_job_long_poll_is_capped_and_plain_poll_does_not_wait(env):
+    env.extractor.gate = threading.Event()
+    object.__setattr__(env.settings, "max_job_wait_seconds", 0.2)  # frozen dataclass
+    job_id = post(env, "/v1/audio/prepare", {"video_id": VID}).get_json()["job_id"]
+    started = time.monotonic()
+    assert env.client.get(f"/v1/jobs/{job_id}").get_json()["status"] in ("queued", "downloading")
+    assert env.client.get(f"/v1/jobs/{job_id}?wait=60").get_json()["status"] in ("queued", "downloading")
+    assert time.monotonic() - started < 2
+    env.extractor.gate.set()
 
 
 # ---- completed-audio delivery ----

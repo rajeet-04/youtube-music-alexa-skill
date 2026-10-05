@@ -24,12 +24,15 @@ from .models import AudioKey, CacheCapacityError
 
 log = logging.getLogger(__name__)
 
-# web_embedded goes first and without cookies: on the deployed VPN host it is the only
-# client that currently downloads public m4a anonymously (android_vr/mweb return 403,
-# tv/default with rotated account cookies fail with "page needs to be reloaded").
-# The legacy fallbacks follow: default (cookie-aware), android_vr, web, tv.
-CLIENT_ORDER = ("web_embedded", "default", "android_vr", "web", "tv")
-COOKIELESS_CLIENTS = {"web_embedded", "android_vr", "ios"}
+# tv_simply goes first, without cookies: with a bgutil PO token it downloads public m4a in
+# ~3 s. web_embedded is next: it also works anonymously, but YouTube serves it a pre-roll ad
+# and refuses the audio URL (403) until the ad's skip time has passed, so yt-dlp sleeps ~5 s
+# first (~10 s per song). On the deployed VPN host android_vr/mweb have returned 403 and
+# tv/default with rotated account cookies "page needs to be reloaded". The legacy fallbacks
+# follow: default (cookie-aware), android_vr, web, tv. YTDLP_CLIENT_ORDER overrides the order
+# (comma-separated) without a rebuild.
+CLIENT_ORDER = ("tv_simply", "web_embedded", "default", "android_vr", "web", "tv")
+COOKIELESS_CLIENTS = {"tv_simply", "web_embedded", "android_vr", "ios"}
 FORMAT_SELECTOR = "140/bestaudio[ext=m4a]/bestaudio/best"
 CHUNK_BYTES = 256 * 1024
 STDERR_LIMIT = 16 * 1024
@@ -75,6 +78,11 @@ class DownloadResult:
     duration_seconds: float | None
     codec_name: str
     client: str
+
+
+def client_order() -> tuple[str, ...]:
+    configured = [c.strip() for c in os.environ.get("YTDLP_CLIENT_ORDER", "").split(",") if c.strip()]
+    return tuple(configured) or CLIENT_ORDER
 
 
 def _cookie_jar_from_header(header: str) -> str:
@@ -331,7 +339,7 @@ class Extractor:
         last_code = "extraction_failed"
         suspect = False
         try:
-            for client in CLIENT_ORDER:
+            for client in client_order():
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     last_code = "extraction_timeout"
