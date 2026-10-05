@@ -10,9 +10,9 @@ fi
 health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$CONTAINER")
 echo "gluetun health: $health"
 country=$(docker exec "$CONTAINER" wget -qO- -T 10 https://ipinfo.io/country 2>/dev/null || true)
-echo "exit country: ${country:-unknown}  (expected: IN)"
-if [ "${country:-}" != "IN" ]; then
-    echo "verify-vpn: exit is not India; check the config in ./vpn" >&2
+echo "exit country: ${country:-unknown}  (expected: ${EXPECTED_COUNTRY:-IN})"
+if [ "${country:-}" != "${EXPECTED_COUNTRY:-IN}" ]; then
+    echo "verify-vpn: exit is not ${EXPECTED_COUNTRY:-IN}; check the config in ./vpn" >&2
     exit 1
 fi
 echo "Kill-switch: with the VPN down, 'docker exec $CONTAINER wget -T 5 -qO- https://ipinfo.io' must FAIL (do not test on a live service)."

@@ -6,7 +6,7 @@
 # VPN_CONTAINER_NAME / GLUETUN_ALIAS in .env to match your existing container.
 #
 # The VPN profile is NOT in git. Put your own files in ./vpn (see vpn/README.md):
-#   WireGuard (default): vpn/wireguard/wg0.conf
+#   WireGuard (default): vpn/wireguard/<VPN_PROFILE>.conf  (default in-mum)
 #   OpenVPN:             vpn/openvpn/surfshark.ovpn  + OPENVPN_USER / OPENVPN_PASSWORD in .env
 services:
   gluetun:
@@ -34,7 +34,8 @@ services:
       FIREWALL_OUTBOUND_SUBNETS: ${DOCKER_WEB_SUBNET:-172.18.0.0/16}
       TZ: ${TZ:-Asia/Kolkata}
     volumes:
-      - ./vpn/wireguard:/gluetun/wireguard:ro
+      # Only the selected profile is mounted (VPN_PROFILE in .env), as the fixed name Gluetun reads.
+      - ./vpn/wireguard/${VPN_PROFILE:-in-mum}.conf:/gluetun/wireguard/wg0.conf:ro
       - ./vpn/openvpn:/gluetun/openvpn:ro
     ports:
       # Loopback-only smoke-test access to the API. Public traffic goes through
