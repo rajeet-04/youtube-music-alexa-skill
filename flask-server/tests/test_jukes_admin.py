@@ -44,6 +44,8 @@ class FakeBrowser:
         self.start_code = 202
         self.export = (200, JAR)
         self.state = "idle"
+        self.open_code = 200
+        self.states = []  # optional scripted status sequence
 
     def start(self):
         self.calls.append("start")
@@ -61,7 +63,13 @@ class FakeBrowser:
         self.calls.append("close")
         return 200
 
+    def open_youtube(self):
+        self.calls.append("open_youtube")
+        return self.open_code
+
     def status(self):
+        if self.states:
+            return {"state": self.states.pop(0)}
         return {"state": self.state}
 
     def export_cookies(self):
@@ -356,3 +364,46 @@ def test_parse_netscape_rules():
     assert [r[5] for r in rows] == ["SAPISID", "__Secure-3PSID"]
     with pytest.raises(CookieFormatError):
         parse_netscape("x" * 1_000_001)
+
+
+def test_csrf_endpoint_requires_admin_and_matches_session(env):
+    assert env.client.get("/admin/api/csrf").status_code == 401
+    login(env)
+    token = env.client.get("/admin/api/csrf").get_json()["csrf"]
+    assert token == csrf_of(env)
+
+
+def test_open_youtube_needs_csrf_lease_and_running_browser(env):
+    login(env)
+    token = csrf_of(env)
+    h = {"X-CSRF-Token": token}
+    assert env.client.post("/admin/youtube/browser/open-youtube").status_code == 403
+    assert env.client.post("/admin/youtube/browser/open-youtube", headers=h).status_code == 403  # no lease
+    env.client.post("/admin/youtube/browser/start", headers=h)
+    assert env.client.post("/admin/youtube/browser/open-youtube", headers=h).status_code == 200
+    env.browser.open_code = 409
+    r = env.client.post("/admin/youtube/browser/open-youtube", headers=h)
+    assert r.status_code == 409 and r.get_json()["error"]["code"] == "browser_not_running"
+
+
+def test_export_waits_while_the_sidecar_validates_then_saves(env):
+    login(env)
+    h = {"X-CSRF-Token": csrf_of(env)}
+    env.client.post("/admin/youtube/browser/start", headers=h)
+    env.app.config["JUKES_EXPORT_POLLS"] = 10
+    env.browser.states = ["capture_requested", "validating_login", "captured"]
+    r = env.client.post("/admin/youtube/browser/export", headers=h)
+    assert r.status_code == 200 and env.cookies.status().connected
+    assert env.browser.states == []  # polled through all states, then exported
+
+
+def test_signed_out_capture_returns_a_readable_error(env):
+    login(env)
+    h = {"X-CSRF-Token": csrf_of(env)}
+    env.client.post("/admin/youtube/browser/start", headers=h)
+    env.app.config["JUKES_EXPORT_POLLS"] = 10
+    env.browser.states = ["capture_requested", "waiting_for_login"]
+    env.browser.export = (409, "")
+    r = env.client.post("/admin/youtube/browser/export", headers=h)
+    body = r.get_json()["error"]
+    assert r.status_code == 409 and "Sign in" in body["message"]

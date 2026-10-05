@@ -73,6 +73,9 @@ class BrowserClient:
     def capture(self) -> int:
         return self._call("/interactive/capture", "POST")[0]
 
+    def open_youtube(self) -> int:
+        return self._call("/interactive/open-youtube", "POST")[0]
+
     def close(self) -> int:
         return self._call("/interactive/close", "POST")[0]
 
@@ -229,6 +232,14 @@ def make_admin(config: AdminConfig, services, cookies: ServerCookies | None,
             return redirect("/admin/login", code=303) if error.status_code == 401 else error
         return render_template("admin.html", csrf=session["csrf"], status=status_view())
 
+    @bp.get("/admin/api/csrf")
+    def api_csrf():
+        """CSRF token for same-origin admin scripts (e.g. the noVNC capture panel)."""
+        session, error = require_admin()
+        if error:
+            return error
+        return jsonify({"csrf": session["csrf"]})
+
     @bp.get("/admin/api/status")
     def api_status():
         session, error = require_admin()
@@ -315,6 +326,19 @@ def make_admin(config: AdminConfig, services, cookies: ServerCookies | None,
         with store.transaction() as connection:
             connection.execute("UPDATE jukes_browser_leases SET closed_at = ? WHERE closed_at IS NULL", (clock(),))
 
+    @bp.post("/admin/youtube/browser/open-youtube")
+    def browser_open_youtube():
+        session, error = require_admin(csrf=True)
+        if error:
+            return error
+        if browser is None:
+            return deny(503, "browser_unavailable")
+        if active_lease(session["sid"]) is None:
+            return deny(403, "no_browser_lease")
+        if browser.open_youtube() != 200:
+            return _error(409, "browser_not_running", "start the browser from the admin page first")
+        return jsonify({"opened": True})
+
     @bp.post("/admin/youtube/browser/export")
     def browser_export():
         """Capture the signed-in profile and install it through the validated replace path."""
@@ -326,15 +350,16 @@ def make_admin(config: AdminConfig, services, cookies: ServerCookies | None,
         if active_lease(session["sid"]) is None:
             return deny(403, "no_browser_lease")
         browser.capture()
-        for _ in range(int(current_app.config.get("JUKES_EXPORT_POLLS", 20))):
-            state = browser.status().get("state")
-            if state in ("candidate_ready", "captured", "complete", "signed_in", "idle"):
+        # The sidecar reports capture_requested/validating_login while it checks the
+        # sign-in; anything else means the attempt finished (captured, signed out, ...).
+        for _ in range(int(current_app.config.get("JUKES_EXPORT_POLLS", 60))):
+            if browser.status().get("state") not in ("capture_requested", "validating_login"):
                 break
             time.sleep(float(current_app.config.get("JUKES_EXPORT_POLL_SECONDS", 1.0)))
         code, jar = browser.export_cookies()
         if code != 200:
             return _error(409 if code in (409, 410) else 502, "export_unavailable",
-                          "browser has no signed-in session to export")
+                          "No signed-in YouTube Music session found. Sign in, then capture again.")
         return apply_cookies(jar)
 
     @bp.post("/admin/youtube/browser/refresh")

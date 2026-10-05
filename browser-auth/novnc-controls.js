@@ -82,45 +82,27 @@
                 overlay.className = "";
                 setButtonsDisabled(false);
             }, 700);
-        }, 1500);
+        }, 4000);
     }
 
-    // Close only after Flask has validated and promoted the captured headers.
-    // Capture failures and Google sign-in challenges deliberately leave the
-    // VNC page open so the owner can retry without starting a new session.
-    async function waitForSuccessfulCapture() {
-        stopCompletionPoll();
-        try {
-            const response = await fetch("/api/youtube/browser-session/status", {
-                credentials: "same-origin",
-                headers: { "Accept": "application/json" }
-            });
-            const body = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(body.error || "Could not check session status");
-            if (body.state === "connected") {
-                panel.querySelector(".yt-status").textContent = "Connected. Closing this tab...";
-                showCaptureOverlay("Session saved", "Your personalized YouTube Music data is ready.", "success");
-                window.setTimeout(() => window.close(), 700);
-                return;
-            }
-            // After an explicit Capture request, waiting_for_login means the
-            // browser validation found no signed-in YT Music account. It is a
-            // retryable failure, not an in-progress state; otherwise the
-            // blocking overlay would spin forever for a signed-out browser.
-            if (["waiting_for_login", "reconnect_required", "unavailable", "idle"].includes(body.state)) {
-                const message = body.message || (body.state === "waiting_for_login"
-                    ? "YouTube Music is still signed out. Sign in, then capture again."
-                    : "Session was not saved. Try again.");
-                panel.querySelector(".yt-status").textContent = message;
-                failCapture(message);
-                return;
-            }
-            completionPoll = window.setTimeout(waitForSuccessfulCapture, 1000);
-        } catch (error) {
-            const message = error.message || "Could not check session status";
-            panel.querySelector(".yt-status").textContent = message;
-            failCapture(message);
+    // Readable text from JSON error bodies like {"error":{"code","message"}}.
+    function errorText(body, fallback) {
+        const e = body && body.error;
+        if (!e) return fallback;
+        return typeof e === "string" ? e : (e.message || e.code || fallback);
+    }
+
+    let csrfToken = null;
+    async function adminHeaders() {
+        if (!csrfToken) {
+            const r = await fetch("/admin/api/csrf", { credentials: "same-origin", headers: { "Accept": "application/json" } });
+            const b = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(r.status === 401
+                ? "Admin sign-in expired. Reopen this window from /admin/."
+                : errorText(b, "Could not authorise this request"));
+            csrfToken = b.csrf;
         }
+        return { "Accept": "application/json", "Content-Type": "application/json", "X-CSRF-Token": csrfToken };
     }
 
     async function invoke(action) {
@@ -131,28 +113,25 @@
             showCaptureOverlay("Saving your session", "Validating your YouTube Music sign-in...");
         }
         try {
-            const response = await fetch(`/api/youtube/browser-session/${action === "open" ? "open-youtube" : "capture"}`, {
-                method: "POST",
-                credentials: "same-origin",
-                headers: {
-                    "Accept": "application/json",
-                    "Content-Type": "application/json"
-                },
-                body: "{}"
+            // Export is one synchronous admin call: capture, validate with YouTube, encrypt, save.
+            const path = action === "open" ? "open-youtube" : "export";
+            const response = await fetch(`/admin/youtube/browser/${path}`, {
+                method: "POST", credentials: "same-origin", headers: await adminHeaders(), body: "{}"
             });
             const body = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(body.error || "Request failed");
-            status.textContent = action === "capture"
-                ? "Capture requested. Keep this tab open while it validates."
-                : "YouTube Music opened. Sign in, then capture.";
-            if (action === "capture") waitForSuccessfulCapture();
+            if (!response.ok) throw new Error(errorText(body, `Request failed (${response.status})`));
+            if (action === "capture") {
+                status.textContent = "Connected. You can close this tab.";
+                showCaptureOverlay("Session saved", "Your YouTube session is stored for downloads.", "success");
+                window.setTimeout(() => window.close(), 1500);
+            } else {
+                status.textContent = "YouTube Music opened. Sign in, then capture.";
+            }
         } catch (error) {
             const message = error.message || "Request failed";
             status.textContent = message;
             if (action === "capture") failCapture(message);
         } finally {
-            // Capture remains blocked until its validation finishes. Opening
-            // YouTube Music is still immediately reusable.
             if (action !== "capture") setButtonsDisabled(false);
         }
     }
