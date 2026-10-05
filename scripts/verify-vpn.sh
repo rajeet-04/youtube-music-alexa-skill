@@ -9,10 +9,16 @@ if ! docker inspect "$CONTAINER" >/dev/null 2>&1; then
 fi
 health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$CONTAINER")
 echo "gluetun health: $health"
-country=$(docker exec "$CONTAINER" wget -qO- -T 10 https://ipinfo.io/country 2>/dev/null || true)
-echo "exit country: ${country:-unknown}  (expected: ${EXPECTED_COUNTRY:-IN})"
-if [ "${country:-}" != "${EXPECTED_COUNTRY:-IN}" ]; then
-    echo "verify-vpn: exit is not ${EXPECTED_COUNTRY:-IN}; check the config in ./vpn" >&2
+# Gluetun logs "Public IP address is <ip> (<country>, <region>, <city> ...)" after connecting.
+line=$(docker logs "$CONTAINER" 2>&1 | grep "Public IP address is" | tail -1 || true)
+echo "gluetun reports: ${line#*Public IP address is }"
+case "${EXPECTED_COUNTRY:-IN}" in
+    IN) want="India" ;;
+    *) want="${EXPECTED_COUNTRY}" ;;
+esac
+if [ -z "$line" ] || ! grep -q "($want" <<<"$line"; then
+    echo "verify-vpn: exit is not ${want}; check the profile in ./vpn (or wait for the VPN to connect)" >&2
     exit 1
 fi
-echo "Kill-switch: with the VPN down, 'docker exec $CONTAINER wget -T 5 -qO- https://ipinfo.io' must FAIL (do not test on a live service)."
+echo "OK: exit is in ${want}."
+echo "Kill-switch: with the VPN down, 'docker exec $CONTAINER wget -T 5 -qO- https://ifconfig.co' must FAIL (do not test on a live service)."

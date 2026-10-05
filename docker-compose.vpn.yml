@@ -54,12 +54,16 @@ services:
       start_period: 40s
       retries: 3
 
+  # Attach by service name (not container name) so Compose recreates these whenever
+  # gluetun is recreated; a stale container-ID reference would otherwise fail to start.
   ytmusic:
+    network_mode: "service:gluetun"
     depends_on:
       gluetun:
         condition: service_healthy
 
   youtube-browser:
+    network_mode: "service:gluetun"
     depends_on:
       gluetun:
         condition: service_healthy
