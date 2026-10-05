@@ -19,7 +19,21 @@ scripts/tunnel-url.sh        # -> https://<random>.trycloudflare.com
 - The overlay trusts only the internal tunnel peer, so rate limits use the real client IP
   and audio URLs come back as `https://<your-tunnel-host>/...`.
 
-## Want a stable address later?
+## Permanent address: named tunnel (e.g. ms.rajeet.in)
+
+1. Put `rajeet.in` on Cloudflare (nameservers at the registrar; keep Vercel/GitHub records DNS-only).
+2. Zero Trust > Networks > Tunnels > Create tunnel (Cloudflared). Copy the token.
+3. In the tunnel's **Public Hostname** tab: `ms.rajeet.in` -> HTTP -> `caddy:80`.
+4. On the server (the token is never printed or committed):
+   ```bash
+   read -rs -p 'Tunnel token: ' T; echo "CLOUDFLARE_TUNNEL_TOKEN=$T" >> .env; unset T
+   docker compose -f docker-compose.yml -f docker-compose.vpn.yml -f docker-compose.tunnel-named.yml up -d --build
+   curl -s https://ms.rajeet.in/health/live
+   ```
+`ms.rajeet.in` is proxied automatically and no DNS record exposes the server's IP. You do not
+need to install `cloudflared` on the host: the container runs it.
+
+## Want a stable address later? (generic notes)
 
 Needs a domain on your Cloudflare account: create a **named tunnel** (`cloudflared tunnel
 create`, route `api.yourdomain.com` to `http://caddy:80`, run it with a tunnel token instead
