@@ -200,10 +200,17 @@ def test_rate_limit_cooldown_is_bounded_and_suppresses_repeat_attempts(cache: Ca
 
 def test_private_or_account_restricted_video_is_rejected_before_cookie_fallback(cache: Cache):
     calls = []
-    extractor = Extractor(
-        process_factory=lambda args, **kwargs: calls.append(args),
-        public_audio_probe=lambda key, timeout: False,
-    )
+    probes = []
+
+    def process_factory(args, **kwargs):
+        calls.append(list(args))  # anonymous clients cannot reach the private audio
+        return FakeProcess(args, payload=b"", stderr=b"ERROR: client blocked", returncode=1)
+
+    def probe(key, timeout):
+        probes.append(len(calls))
+        return False
+
+    extractor = Extractor(process_factory=process_factory, public_audio_probe=probe)
     key = AudioKey("private-video", "p")
     reservation = cache.reserve(key, requested=True)
 
@@ -215,7 +222,27 @@ def test_private_or_account_restricted_video_is_rejected_before_cookie_fallback(
         )
 
     assert failure.value.code == "public_audio_required"
-    assert calls == []
+    assert probes == [2]  # after tv_simply and web_embedded, before the first cookie attempt
+    assert not any("--cookies" in command for command in calls)
+
+
+def test_public_probe_is_skipped_when_an_anonymous_client_succeeds(cache: Cache):
+    probes = []
+    extractor = Extractor(
+        process_factory=lambda args, **kwargs: FakeProcess(args, payload=b"valid-audio"),
+        public_audio_probe=lambda key, timeout: probes.append(key) or True,
+        media_probe=lambda path: {
+            "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+            "duration": "12.5",
+            "streams": [{"codec_type": "audio", "codec_name": "aac"}],
+        },
+    )
+    key = AudioKey("public-video", "p")
+    reservation = cache.reserve(key, requested=True)
+
+    extractor.download(key, reservation, CredentialSnapshot(cookie_header="SID=operator-cookie", generation=4))
+
+    assert probes == []
 
 
 def test_dead_video_and_flaky_failures_receive_different_backoff(monkeypatch, cache: Cache):

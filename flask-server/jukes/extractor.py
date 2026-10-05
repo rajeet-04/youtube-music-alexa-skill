@@ -332,10 +332,7 @@ class Extractor:
         deadline = time.monotonic() + self.total_timeout_seconds
         has_cookies = bool(credential_snapshot and (
             credential_snapshot.cookie_header or getattr(credential_snapshot, "cookie_jar_text", None)))
-        if has_cookies and not self._public_probe(key, max(1.0, deadline - time.monotonic())):
-            raise ExtractionError("public_audio_required")
-
-        cookie_path = self._write_cookie_file(credential_snapshot) if has_cookies else None
+        cookie_path = None
         last_code = "extraction_failed"
         suspect = False
         try:
@@ -344,6 +341,17 @@ class Extractor:
                 if remaining <= 0:
                     last_code = "extraction_timeout"
                     break
+                # Only an attempt with the server's cookies could reach non-public audio, so the
+                # public-audio probe (a full metadata extraction, ~3 s) runs just before the first
+                # such attempt. Anonymous clients go first and usually succeed without it.
+                if has_cookies and cookie_path is None and client not in COOKIELESS_CLIENTS:
+                    if not self._public_probe(key, max(1.0, remaining)):
+                        raise ExtractionError("public_audio_required")
+                    cookie_path = self._write_cookie_file(credential_snapshot)
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        last_code = "extraction_timeout"
+                        break
                 attempt_timeout = min(remaining, self.fallback_timeout_seconds)
                 try:
                     return self._attempt(key, destination, client, cookie_path, attempt_timeout)
