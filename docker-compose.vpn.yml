@@ -28,7 +28,7 @@ services:
       # Native Surfshark provider alternative (set VPN_SERVICE_PROVIDER=surfshark):
       WIREGUARD_PRIVATE_KEY: ${WIREGUARD_PRIVATE_KEY:-}
       WIREGUARD_ADDRESSES: ${WIREGUARD_ADDRESSES:-}
-      SERVER_COUNTRIES: ${VPN_SERVER_COUNTRIES:-}
+      SERVER_COUNTRIES: ${VPN_NATIVE_SERVER_COUNTRIES:-}
       # Let Caddy (on the web network) reach Flask and noVNC inside this namespace,
       # and let the app reach bgutil-provider on the same Docker network.
       FIREWALL_INPUT_PORTS: ${FIREWALL_INPUT_PORTS:-5000,6080}

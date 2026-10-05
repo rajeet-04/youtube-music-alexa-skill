@@ -11,7 +11,7 @@ Templates: `vpn/wireguard/wg0.conf.example`, `vpn/openvpn/surfshark.ovpn.example
 
 Pick an **India** server when you generate the config in the Surfshark dashboard
 (Manual setup → WireGuard or OpenVPN → location India). Whatever endpoint is in
-the file is the exit country; `VPN_SERVER_COUNTRIES` only applies if you switch to
+the file is the exit country; `VPN_NATIVE_SERVER_COUNTRIES` only applies if you switch to
 Gluetun's built-in `surfshark` provider instead of a custom file.
 
 Both directories are bind-mounted read-only into Gluetun, so they must exist
