@@ -1,0 +1,43 @@
+# Caddy config for the Cloudflare Quick Tunnel overlay (docker-compose.tunnel.yml).
+# Plain HTTP on the internal network only: TLS terminates at Cloudflare's edge and
+# nothing is published to the host. The tunnel container is the only peer, so its
+# forwarded client IP (CF-Connecting-IP) is trusted.
+{
+    auto_https off
+    servers {
+        trusted_proxies static {$DOCKER_WEB_SUBNET:172.18.0.0/16}
+        trusted_proxies_strict
+        client_ip_headers CF-Connecting-IP X-Forwarded-For
+    }
+}
+
+:80 {
+    handle_path /youtube-login/* {
+        forward_auth {$GLUETUN_ALIAS:gluetun}:5000 {
+            uri /admin/youtube/browser/authorize
+            # The backend receives Caddy's resolved peer/client identity, not
+            # caller-supplied Cloudflare or forwarding headers.
+            header_up X-Forwarded-For {client_ip}
+            header_up X-Real-IP {client_ip}
+            header_up -CF-Connecting-IP
+            header_up -True-Client-IP
+            # A WebSocket request is cloned for this ordinary HTTP auth
+            # check. Strip upgrade headers from the clone only; the original
+            # request keeps them for the noVNC reverse proxy below.
+            header_up -Connection
+            header_up -Upgrade
+        }
+        header Cache-Control "no-store"
+        reverse_proxy {$GLUETUN_ALIAS:gluetun}:6080
+    }
+    handle {
+        reverse_proxy {$GLUETUN_ALIAS:gluetun}:5000 {
+            # Overwrite caller-supplied IP claims with Caddy's computed
+            # identity. With no trusted edge config, this is the direct peer.
+            header_up X-Forwarded-For {client_ip}
+            header_up X-Real-IP {client_ip}
+            header_up -CF-Connecting-IP
+            header_up -True-Client-IP
+        }
+    }
+}

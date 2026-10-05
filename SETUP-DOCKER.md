@@ -236,6 +236,10 @@ set `YTDLP_BGUTIL_BASE_URL` to its IP on the `web` network.
 | 6080 | noVNC | Caddy only, behind admin session + lease |
 | 8765, 9222, 5900 | browser controller / CDP / VNC | never published |
 
+## Public access without a domain (Cloudflare Quick Tunnel)
+
+See `cloudflare/README.md`: add `-f docker-compose.tunnel.yml`, then `scripts/tunnel-url.sh`.
+
 ## Cloudflare Wrangler
 
 Wrangler is installed with Bun (`bun install`; pinned in `bun.lock`). It is not

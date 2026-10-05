@@ -15,7 +15,7 @@ from .credentials import (
 )
 from .identity import InvalidInstallationToken
 from .jobs import Job, JobQueueFull
-from .limits import RateLimiter, client_address
+from .limits import RateLimiter, client_address, is_trusted_peer
 from .models import AudioKey, CacheCapacityError
 from .music import (
     VIDEO_ID_RE, ANONYMOUS, MusicError, Track, TrackSelector, UserContext,
@@ -200,7 +200,16 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
 
     # -- helpers -------------------------------------------------------
     def base_url() -> str:
-        return (settings.public_base_url or request.url_root).rstrip("/")
+        if settings.public_base_url:
+            return settings.public_base_url.rstrip("/")
+        if is_trusted_peer(request.remote_addr, settings.trusted_proxies):
+            # Behind our own proxy/tunnel: honour its scheme and host so a changing
+            # *.trycloudflare.com address still yields correct https audio URLs.
+            proto = (request.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip()
+            host = (request.headers.get("X-Forwarded-Host") or request.host or "").split(",")[0].strip()
+            if proto in ("http", "https") and re.fullmatch(r"[A-Za-z0-9.-]+(:\d{1,5})?", host or ""):
+                return f"{proto}://{host}"
+        return request.url_root.rstrip("/")
 
     def context() -> UserContext:
         token = bearer()

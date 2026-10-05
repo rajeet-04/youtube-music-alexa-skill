@@ -43,6 +43,14 @@ def parse_networks(values: Iterable[str]) -> tuple:
     return tuple(networks)
 
 
+def is_trusted_peer(remote_addr: str | None, trusted: tuple) -> bool:
+    try:
+        ip = ipaddress.ip_address(remote_addr or "")
+    except ValueError:
+        return False
+    return any(ip in network for network in trusted)
+
+
 def client_address(remote_addr: str | None, forwarded: dict[str, str | None], trusted: tuple) -> str:
     """Return the caller's address, honouring forwarding headers only from trusted peers.
 

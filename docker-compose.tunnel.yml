@@ -1,0 +1,32 @@
+# Optional override: public HTTPS through a free Cloudflare Quick Tunnel.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.vpn.yml -f docker-compose.tunnel.yml up -d --build
+#   scripts/tunnel-url.sh        # prints https://<random>.trycloudflare.com
+#
+# No domain, account or public IP needed, and nothing listens on the host (80/443 are
+# NOT published). Limits: the URL is random and CHANGES every time the tunnel
+# container is recreated; Cloudflare gives no uptime guarantee for quick tunnels
+# (testing/personal use). For a stable address use a named tunnel on your own domain.
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://caddy:80
+    depends_on:
+      - caddy
+    networks:
+      - web
+
+  caddy:
+    ports: !reset []
+    volumes: !override
+      - ./Caddyfile.tunnel:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  ytmusic:
+    environment:
+      # Caddy (inside the web network) is the only peer; trust its forwarded scheme/IP.
+      JUKES_TRUSTED_PROXY_CIDRS: ${DOCKER_WEB_SUBNET:-172.18.0.0/16}
+      PUBLIC_BASE_URL: ""

@@ -387,3 +387,16 @@ def test_legacy_head_inspects_only_completed_files(env):
     prepared(env)
     r = env.client.head(f"/audio/?video_id={VID}")
     assert r.status_code == 200 and r.headers["Content-Length"] == str(len(PAYLOAD))
+
+
+def test_audio_url_uses_forwarded_scheme_and_host_only_from_trusted_proxy(env):
+    from jukes.limits import parse_networks
+    prepared(env)
+    hdr = {"X-Forwarded-Proto": "https", "X-Forwarded-Host": "quick-demo.trycloudflare.com"}
+    def url(settings):
+        app = create_app(settings, env.app.extensions["jukes"])
+        return app.test_client().post("/v1/audio/prepare", json={"video_id": VID}, headers=hdr).get_json()["audio_url"]
+    assert url(Settings(trusted_proxies=parse_networks(["127.0.0.0/8"]))) == f"https://quick-demo.trycloudflare.com/v1/audio/{VID}"
+    assert url(Settings()).startswith("http://localhost")  # untrusted peer cannot choose the host
+    assert url(Settings(public_base_url="https://fixed.example", trusted_proxies=parse_networks(["127.0.0.0/8"]))
+               ) == f"https://fixed.example/v1/audio/{VID}"
