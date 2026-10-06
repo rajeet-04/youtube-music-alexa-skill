@@ -73,7 +73,7 @@ class Cache:
         self.files_dir.mkdir(parents=True, exist_ok=True)
         self.staging_dir.mkdir(parents=True, exist_ok=True)
         self.store = store or Store(config.database_path)
-        self.metrics = Metrics(self.store, clock=clock)
+        self.metrics = Metrics(self.store, clock=clock, warmup_ttl=config.warmup_ttl_seconds)
         self.media_validator = media_validator or self._default_media_validator
         self._pid = os.getpid()
         self._process_start_token = _process_start(self._pid) or "unknown"

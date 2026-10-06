@@ -282,6 +282,7 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
             metrics.record('admission_rejected')
             with cache.store.transaction() as c:
                 c.execute('DELETE FROM jukes_metrics_pending WHERE id=?',(observation,))
+            metrics._monotonic_starts.pop(observation,None)
             raise
         metrics.attach_preparation(observation,job.job_id,category)
         return job
@@ -322,6 +323,12 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
 
     def serve(key: AudioKey, *, touch: bool, headers: dict[str, str] | None = None) -> Response | None:
         """Serve a completed file; the reader lease lives until the response closes."""
+        if touch:
+            try:
+                cache.promote(key)
+            except CacheCapacityError as error:
+                status, retryable = JOB_ERRORS.get(error.code,(503,True))
+                raise ApiError(status,error.code,'cache cannot admit this track',retryable) from None
         entry, release = cache.open_lease(key, touch=touch)
         if entry is None:
             release()

@@ -99,7 +99,7 @@ def build_services(config: CacheConfig | None = None) -> Services:
 def create_app(config: Settings | None = None, services: Services | None = None,
                admin: AdminConfig | None = None, browser: BrowserClient | None = None,
                refresher: CookieRefresher | None = None, autorefresh: bool | None = None) -> Flask:
-    app = Flask(__name__, template_folder=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates"))
+    app = Flask(__name__, static_folder=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static"), template_folder=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates"))
     app.config["MAX_CONTENT_LENGTH"] = MAX_BODY_BYTES + 64 * 1024  # multipart framing headroom
     settings = config or Settings(
         legacy_wait_seconds=float(os.environ.get("JUKES_LEGACY_WAIT_SECONDS", 25)),

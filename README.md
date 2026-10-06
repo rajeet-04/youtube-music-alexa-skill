@@ -52,3 +52,12 @@ uv run --no-project --with werkzeug --with cryptography scripts/setup-secrets.py
 
 Keys must stay stable; back them up separately from the database. See
 [`SETUP-DOCKER.md`](SETUP-DOCKER.md#what-you-still-need-to-provide) for the full checklist.
+
+### Operational metrics
+
+The authenticated admin dashboard includes first-party job performance, audio
+cache effectiveness, speculative warmup consumption and local resource usage.
+Choose a 15-minute, hourly or daily window; lifetime totals and current capacity
+are labelled separately. Percentiles show their sample coverage, eviction is
+separate from failures, and missing resource samples remain unavailable. See
+[metric definitions and compatibility](docs/JUKES_API.md#administrative-operational-metrics).

@@ -7,22 +7,29 @@ section{border:1px solid #8884;border-radius:8px;padding:1rem;margin:1rem 0}
 h2{margin:.1rem 0 .6rem;font-size:1.05rem}table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:.2rem .4rem}
 button,input[type=file],textarea{font:inherit}textarea{width:100%;min-height:6rem;box-sizing:border-box}
 .bar{background:#8883;border-radius:4px;height:.6rem}.bar>i{display:block;background:#2b7;height:100%;border-radius:4px}
+h3{font-size:.95rem;margin:1rem 0 .4rem}.muted,#metrics-freshness{color:#666;font-size:.8rem}
+#metrics-freshness{display:block;margin:.4rem 0}.metrics-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:.6rem}
+.metric-panel{min-width:0;border-top:1px solid #8883}.metric-panel td:first-child{width:65%}.metric-panel td:last-child{font-variant-numeric:tabular-nums;text-align:right}
+.trends{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem}.trend svg{width:100%;height:42px}.trend{font-size:.8rem}.bar{margin:.3rem 0}
+select{font:inherit} .metrics-grid p{font-size:.8rem}.capacity{font-size:.85rem}.warning{color:#a40}
+@media(max-width:420px){.metrics-grid,.trends{grid-template-columns:1fr}body{padding:0 .65rem}section{padding:.75rem}}
 </style></head><body>
 <h1>JUKES admin</h1>
 <form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Sign out</button></form>
 
-<section><h2>Cache pools</h2>
-{% for name, pool in status.pools.items() %}
-  <p>{{ name|capitalize }}: {{ '%.2f'|format(pool.used_bytes/1e9) }} GB of {{ '%.2f'|format(pool.limit_bytes/1e9) }} GB
-  {% if pool.ttl_seconds %}(expires {{ pool.ttl_seconds }}s after completion){% endif %}</p>
-  <div class="bar"><i style="width:{{ [100, (pool.used_bytes*100/pool.limit_bytes)|int]|min }}%"></i></div>
-{% endfor %}</section>
-
-<section><h2>Jobs</h2>
-<table><tr>{% for k, v in status.jobs.jobs.items() %}<th>{{ k }}</th>{% endfor %}</tr>
-<tr>{% for k, v in status.jobs.jobs.items() %}<td>{{ v }}</td>{% endfor %}</tr></table>
-<p>{{ status.jobs.workers }} workers, queue limit {{ status.jobs.queue_limit }}.
-{% if status.jobs.failure_codes %}Failures: {% for k, v in status.jobs.failure_codes.items() %}{{ k }}&times;{{ v }} {% endfor %}{% endif %}</p></section>
+<section aria-labelledby="operations-title">
+<h2 id="operations-title">Operational metrics · JUKES backend</h2>
+<p class="muted">First-party preparation, audio cache and job pipeline.</p>
+<label>Rolling window <select id="metrics-window"><option value="15m">Last 15 minutes</option><option value="1h">Last hour</option><option value="24h">Last 24 hours</option></select></label>
+<span id="metrics-freshness" role="status">Initial snapshot</span>
+<div id="metrics-content">
+<h3>Cache pools</h3>
+{% for name, pool in status.pools.items() %}<p>{{ name|capitalize }}: {{ '%.2f'|format(pool.used_bytes/1e9) }} GB of {{ '%.2f'|format(pool.limit_bytes/1e9) }} GB</p>{% endfor %}
+<p>Jobs: {% for name,count in status.jobs.jobs.items() %}{{ name }} {{ count }} {% endfor %}</p>
+</div>
+<script id="metrics-initial" type="application/json">{{ status.metrics|tojson }}</script>
+<script src="/static/admin-metrics.js" defer></script>
+</section>
 
 <section><h2>Download cookies</h2>
 <p>Status: {% if status.cookies.connected %}connected (generation {{ status.cookies.generation }}, {{ status.cookies.cookie_count }} cookies){% else %}not connected{% endif %}.

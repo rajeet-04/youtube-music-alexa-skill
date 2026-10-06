@@ -106,6 +106,8 @@ class Store:
                     ON jukes_jobs(status, updated_at);
                 """
             )
+            if not connection.in_transaction:
+                connection.execute("BEGIN IMMEDIATE")
             job_sql = connection.execute("SELECT sql FROM sqlite_master WHERE name='jukes_jobs'").fetchone()[0]
             if "'evicted'" not in job_sql:
                 indexes = [r[0] for r in connection.execute("SELECT sql FROM sqlite_master WHERE tbl_name='jukes_jobs' AND type='index' AND sql IS NOT NULL")]
@@ -117,6 +119,9 @@ class Store:
                     connection.execute(index)
             connection.execute("UPDATE jukes_jobs SET status='evicted' WHERE status='failed' AND error_code='cache_evicted'")
             connection.execute("CREATE TABLE IF NOT EXISTS jukes_job_results(job_id TEXT PRIMARY KEY, completed_at REAL NOT NULL)")
+            connection.execute("INSERT OR IGNORE INTO jukes_job_results SELECT j.job_id,a.completed_at "
+                "FROM jukes_jobs j JOIN jukes_audio a ON j.video_id=a.video_id AND j.policy=a.policy "
+                "WHERE j.status='ready' AND a.completed_at<=j.updated_at")
             reservation_columns = {
                 str(row["name"])
                 for row in connection.execute("PRAGMA table_info(jukes_reservations)").fetchall()

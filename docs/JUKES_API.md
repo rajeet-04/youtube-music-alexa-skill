@@ -150,3 +150,41 @@ the requested pool).
 - [ ] Handle 202/429/503 with `Retry-After`; fall back to the existing provider chain on terminal failure.
 - [ ] (Optional) installation token + session connect/refresh/disconnect; redact credentials from logs.
 - [ ] Keep the build-config backend key non-blank until the app gate is relaxed.
+
+## Administrative operational metrics
+
+`GET /admin/api/status` remains session-authenticated and `Cache-Control: no-store`.
+Its additive `metrics` object describes only the first-party JUKES pipeline;
+no third-party provider metrics or credentials are returned. Lifetime counters
+start at `metrics.started_at`, survive restart, and are not backfilled from old
+jobs. Rolling windows (`15m`, `1h`, `24h`) use minute buckets (up to 60 seconds of
+boundary approximation), 24-hour retention, and bounded latency samples (10,000
+per category). P99 requires 100 samples; null means unavailable. Means use all
+observations; percentile sample counts and sampling flags are explicit.
+
+Preparation latency includes metadata resolution, queue wait and validation.
+Cached, warmed, joined/in-flight, cold and recovered paths are separate. Recovery
+includes restart downtime. Polls, HEAD, metadata-only lookups and repeated audio
+ranges are excluded. Audio cache hit rates describe preparation requests, not
+HTTP range reads or metadata-cache lookups. Admission rejection is separate from
+accepted preparation failure. Retries cover attempted extractor fallbacks and
+job recovery; internal transport retry counts are unavailable.
+
+Warmup consumption is unique per speculative result. Completed-before-request
+warmup hits and in-flight promotions are separate. Requested warmup-hit share is
+completed warmup hits divided by requested preparations. Cohort usefulness is
+consumed results divided by successful results completed inside the selected
+window; recent cohorts are still maturing. Comparing path latency describes
+observations, not causal savings for identical tracks.
+
+Job status now includes `evicted` as a distinct terminal state alongside `ready`
+and `failed`. Evicted responses omit `audio_url` and include a redacted retryable
+reason (`cache_evicted` or `warmup_expired`). Clients should initiate a fresh
+prepare for these results. Eviction does not increase failure counts. Old
+`failed/cache_evicted` records migrate to `evicted` without changing other data.
+
+Resource usage is locally sampled every five seconds or less frequently, on
+admin demand. CPU/RAM include host/container scope and effective limits. Network
+counts non-loopback interfaces in the shared network namespace (including other
+services sharing it); RX/TX rates require two samples and do not measure network
+capacity. No monitoring stack or external health probe is added.

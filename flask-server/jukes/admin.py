@@ -25,6 +25,7 @@ from werkzeug.security import check_password_hash
 
 from .server_cookies import CookieFormatError, CookieValidationError, ServerCookies
 from .credentials import CredentialError, MissingCredentialKey
+from .resources import ResourceSampler
 
 SESSION_COOKIE = "jukes_admin"
 LOGIN_COOKIE = "jukes_login_csrf"
@@ -97,6 +98,7 @@ def make_admin(config: AdminConfig, services, cookies: ServerCookies | None,
                clock: Callable[[], float] = time.time, refresher=None) -> Blueprint:
     bp = Blueprint("jukes_admin", __name__, template_folder="../templates")
     store = services.cache.store
+    resources = ResourceSampler(services.cache.audio_dir)
     with store.transaction() as connection:
         connection.executescript(
             "CREATE TABLE IF NOT EXISTS jukes_admin_sessions (sid TEXT PRIMARY KEY, csrf TEXT NOT NULL, "
@@ -224,6 +226,12 @@ def make_admin(config: AdminConfig, services, cookies: ServerCookies | None,
                         "updated_at": cookie_status.updated_at if cookie_status else None},
             "browser_configured": browser is not None,
         }
+        metrics = cache.metrics.snapshot()
+        metrics['current'] = {'jobs':view['jobs'], 'pools':cache.operational_snapshot(),
+            'health': 'serving' if (not services.jobs._threads or all(t.is_alive() for t in services.jobs._threads)) else 'degraded'}
+        metrics['resources'] = resources.snapshot()
+        metrics['retry_coverage'] = 'Extractor fallbacks and job recovery; transport retries unavailable'
+        view['metrics'] = metrics
         if refresher is not None:
             r = refresher.state()
             view["refresh"] = {"needs_attention": r.needs_attention, "reason": r.reason,

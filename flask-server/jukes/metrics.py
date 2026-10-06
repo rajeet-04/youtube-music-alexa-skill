@@ -21,8 +21,10 @@ def rate(numerator, denominator):
 
 
 class Metrics:
-    def __init__(self, store, clock=time.time, sample_limit=10000):
+    def __init__(self, store, clock=time.time, sample_limit=10000, monotonic=time.monotonic, warmup_ttl=7200):
         self.store, self.clock = store, clock
+        self.monotonic, self.warmup_ttl = monotonic, warmup_ttl
+        self._monotonic_starts = {}
         self.sample_limit = max(1, int(sample_limit))
         self._last_prune = 0.0
         with store.transaction() as c:
@@ -72,7 +74,7 @@ class Metrics:
             c.execute('DELETE FROM jukes_metrics_samples WHERE at < ?', (now-86400,))
             # Markers are needed while retained terminal jobs can emit transitions.
             c.execute('DELETE FROM jukes_metrics_once WHERE at < ?', (now-172800,))
-            c.execute('DELETE FROM jukes_metrics_warmups WHERE completed_at < ?', (now-93600,))
+            c.execute('DELETE FROM jukes_metrics_warmups WHERE completed_at < ?', (now-86400-self.warmup_ttl,))
         self._last_prune = now
 
     @staticmethod
@@ -128,7 +130,7 @@ class Metrics:
                 'failure_rate': rate(counters.get('prepare_failed',0), counters.get('prepare_failed',0)+counters.get('prepare_success',0)),
                 'warmup_hit_rate': rate(counters.get('warmup_hit',0), counters.get('cache_hit',0)+counters.get('cache_miss',0)),
                 'warmup_cohort': {'completed': len(selected), 'consumed': consumed,
-                    'usefulness': rate(consumed, len(selected)), 'maturing': any(now-r['completed_at'] < 7200 for r in selected)}}
+                    'usefulness': rate(consumed, len(selected)), 'maturing': any(now-r['completed_at'] < self.warmup_ttl for r in selected)}}
         return {'source': 'jukes', 'started_at': started, 'sample_limit': self.sample_limit,
                 'lifetime': totals, 'windows': windows}
 
@@ -141,6 +143,7 @@ class Metrics:
                 return None
             c.execute('INSERT INTO jukes_metrics_pending(id,started_at,category) VALUES (?,?,?)',
                       (observation, started_at, 'cold'))
+        self._monotonic_starts[observation] = self.monotonic()-max(0,self.clock()-started_at)
         return observation
 
     def attach_preparation(self, observation_id, job_id, category):
@@ -162,12 +165,13 @@ class Metrics:
                     success = status == 'ready'
                     category = 'recovered' if recovered else row['category']
                     self.record('prepare_success' if success else 'prepare_failed', category=category,
-                        duration_seconds=max(0,self.clock()-row['started_at']) if success else None,
+                        duration_seconds=(max(0,self.monotonic()-self._monotonic_starts[row['id']]) if row['id'] in self._monotonic_starts and not recovered else max(0,self.clock()-row['started_at'])) if success else None,
                         once=row['id'], connection=c)
                     if not success:
                         terminal = error_code in ('video_unavailable','public_audio_required','invalid_media','track_too_large','warmup_too_large')
                         self.record('terminal_failure' if terminal else 'temporary_failure', once=row['id'], connection=c)
                 c.execute('DELETE FROM jukes_metrics_pending WHERE id=?', (row['id'],))
+                self._monotonic_starts.pop(row['id'],None)
 
     def finish_preparation(self, observation_id, *, success, duration_seconds, retryable=False):
         if observation_id is None:
@@ -181,6 +185,7 @@ class Metrics:
             if not success:
                 self.record('temporary_failure' if retryable else 'terminal_failure', once=observation_id, connection=c)
             c.execute('DELETE FROM jukes_metrics_pending WHERE id=?', (observation_id,))
+            self._monotonic_starts.pop(observation_id,None)
 
     def warmup_started(self, job_id, connection):
         connection.execute('INSERT OR IGNORE INTO jukes_metrics_warmups(result_id) VALUES (?)', (job_id,))

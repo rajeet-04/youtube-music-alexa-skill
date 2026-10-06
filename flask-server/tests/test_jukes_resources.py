@@ -60,3 +60,17 @@ def test_resource_network_counter_reset_is_not_negative(tmp_path):
     files['/proc/net/dev']='eth0: 1 0 0 0 0 0 0 0 2 0 0 0 0 0 0 0'
     result=sampler.snapshot()
     assert result['network']['rx_bytes_per_second'] is None
+
+
+def test_resource_v1_quota_and_memory_limits(tmp_path):
+    sampler,now,files=fixture(tmp_path)
+    for path in list(files):
+        if '/sys/fs/cgroup/' in path:del files[path]
+    files.update({'/sys/fs/cgroup/cpuacct/cpuacct.usage':'1000000000',
+      '/sys/fs/cgroup/cpu/cpu.cfs_quota_us':'25000', '/sys/fs/cgroup/cpu/cpu.cfs_period_us':'100000',
+      '/sys/fs/cgroup/memory/memory.limit_in_bytes':'256000', '/sys/fs/cgroup/memory/memory.usage_in_bytes':'128000'})
+    sampler.snapshot();now[0]=10
+    files['/sys/fs/cgroup/cpuacct/cpuacct.usage']='2250000000'
+    result=sampler.snapshot()
+    assert result['cpu']['percent']==50
+    assert result['memory']['limit_bytes']==256000 and result['memory']['used_bytes']==128000

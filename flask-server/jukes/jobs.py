@@ -330,6 +330,7 @@ class Jobs:
                 if self._by_key.get(job.key) == job_id:
                     del self._by_key[job.key]
         with self.cache.store.transaction() as connection:
+            connection.execute("DELETE FROM jukes_job_results WHERE job_id IN (SELECT job_id FROM jukes_jobs WHERE status IN ('ready','failed','evicted') AND updated_at<?)",(cutoff,))
             connection.execute(
                 "DELETE FROM jukes_jobs WHERE status IN ('ready', 'failed', 'evicted') AND updated_at < ?", (cutoff,))
         return len(stale)
@@ -398,11 +399,11 @@ class Jobs:
                 try:
                     self.on_cookie_suspect()
                 except Exception:  # noqa: BLE001 - a refresh hook must never fail a job
-                    log.exception("cookie refresh hook failed")
+                    log.warning("cookie refresh hook failed")
         except CacheCapacityError as error:
             error_code = error.code
         except Exception:  # noqa: BLE001 - never surface extractor internals
-            log.exception("download job %s failed", job.job_id)
+            log.error("download job %s failed: extraction_failed", job.job_id)
             error_code = "extraction_failed"
         if error_code is not None:
             self.cache.release_reservation(key)

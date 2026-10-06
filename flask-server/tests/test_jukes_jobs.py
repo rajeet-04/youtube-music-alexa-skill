@@ -386,3 +386,36 @@ def test_evicted_state_migration_preserves_legacy_tables(tmp_path):
     with store.connection() as c:
         assert c.execute("SELECT status FROM jukes_jobs WHERE job_id='j'").fetchone()[0] == 'evicted'
         assert c.execute('SELECT value FROM unrelated').fetchone()[0] == 'keep'
+
+
+def test_migration_upgrades_actual_old_check_constraint(tmp_path):
+    from jukes.store import Store
+    path=tmp_path/'old-check.db'
+    db=sqlite3.connect(path)
+    db.execute("CREATE TABLE jukes_jobs(job_id TEXT PRIMARY KEY,video_id TEXT NOT NULL,policy TEXT NOT NULL,requested INTEGER NOT NULL,status TEXT NOT NULL CHECK(status IN ('queued', 'downloading', 'ready', 'failed')),error_code TEXT,created_at REAL NOT NULL,updated_at REAL NOT NULL,recovery_count INTEGER NOT NULL DEFAULT 0,owner_pid INTEGER NOT NULL DEFAULT 0,owner_start TEXT NOT NULL DEFAULT '')")
+    db.execute("INSERT INTO jukes_jobs VALUES ('old','v','p',1,'failed','cache_evicted',1,2,0,0,'')")
+    db.commit();db.close()
+    store=Store(path)
+    with store.connection() as c:
+        assert c.execute("SELECT status FROM jukes_jobs WHERE job_id='old'").fetchone()[0]=='evicted'
+        assert "'evicted'" in c.execute("SELECT sql FROM sqlite_master WHERE name='jukes_jobs'").fetchone()[0]
+
+
+def test_job_totals_survive_worker_restart(cache):
+    jobs=Jobs(cache,FakeExtractor(),worker_count=1)
+    job=jobs.submit(AudioKey('persist','p'),True)
+    jobs.wait(job.job_id,2);jobs.shutdown()
+    jobs=Jobs(cache,FakeExtractor(),worker_count=1)
+    try:
+        assert jobs.stats()['jobs']['ready']==1
+        assert cache.metrics.snapshot()['lifetime']['job_completed']==1
+    finally:jobs.shutdown()
+
+
+def test_unexpected_extraction_exception_is_redacted_in_logs(cache,caplog):
+    jobs=Jobs(cache,FakeExtractor(fail=True),worker_count=1)
+    try:
+        job=jobs.submit(AudioKey('log-redaction','p'),True)
+        assert jobs.wait(job.job_id,2).status=='failed'
+        assert 'secret cookie value' not in caplog.text
+    finally:jobs.shutdown()

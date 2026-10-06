@@ -307,7 +307,7 @@ def test_status_view_shows_pools_jobs_and_cookie_state_without_secrets(env):
     login(env)
     body = env.client.get("/admin/api/status").get_json()
     assert body["pools"]["requested"]["limit_bytes"] == 100_000 and body["pools"]["warmup"]["ttl_seconds"] == 7200
-    assert body["jobs"]["jobs"] == {"queued": 0, "downloading": 0, "ready": 0, "failed": 0}
+    assert body["jobs"]["jobs"] == {"queued": 0, "downloading": 0, "ready": 0, "failed": 0, "evicted": 0}
     assert body["cookies"]["connected"] is True
     page = env.client.get("/admin/").get_data(as_text=True)
     assert "Cache pools" in page and "secret-sapisid" not in page and "GB of" in page
@@ -440,3 +440,27 @@ def test_manual_refresh_endpoint_needs_csrf_and_shows_state(env):
     body = c.get("/admin/api/status").get_json()
     assert body["refresh"]["needs_attention"] is False
     assert "Automatic refresh" in c.get("/admin/").get_data(as_text=True)
+
+
+def test_admin_metrics_authenticated_and_redacted(env):
+    assert env.client.get('/admin/api/status').status_code == 401
+    env.cookies.replace(JAR)
+    login(env)
+    response=env.client.get('/admin/api/status')
+    assert response.headers['Cache-Control']=='no-store'
+    metrics=response.get_json()['metrics']
+    assert metrics['source']=='jukes'
+    assert set(metrics['windows'])=={'15m','1h','24h'}
+    assert metrics['current']['pools']['requested']['ready_bytes']==0
+    assert 'resources' in metrics
+    text=response.get_data(as_text=True)
+    assert 'secret-sapisid' not in text and 'Authorization' not in text
+    page=env.client.get('/admin/').get_data(as_text=True)
+    assert 'Operational metrics' in page and 'admin-metrics.js' in page
+    assert 'Save cookies' in page and 'Start browser' in page
+
+
+def test_admin_metrics_script_is_served_from_application_static_directory(env):
+    response=env.client.get('/static/admin-metrics.js')
+    assert response.status_code==200
+    assert 'javascript' in response.content_type

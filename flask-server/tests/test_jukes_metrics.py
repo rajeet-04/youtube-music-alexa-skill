@@ -86,3 +86,25 @@ def test_pending_observations_are_bounded(tmp_path):
             [(str(n),clock[0]) for n in range(10000)])
     assert m.begin_preparation(clock[0]) is None
     assert m.snapshot()['lifetime']['latency_dropped']==1
+
+
+def test_live_preparation_latency_uses_monotonic_clock(tmp_path):
+    from jukes.metrics import Metrics
+    wall=[100000.0]; mono=[10.0]
+    m=Metrics(Store(tmp_path/'mono.db'),clock=lambda:wall[0],monotonic=lambda:mono[0])
+    observation=m.begin_preparation(wall[0])
+    with m.store.transaction() as c:
+        c.execute("INSERT INTO jukes_jobs VALUES ('job','v','p',1,'queued',NULL,1,2,0,0,'')")
+    m.attach_preparation(observation,'job','cold')
+    wall[0]+=1000;mono[0]+=2
+    m.finish_job('job','ready')
+    assert m.snapshot()['windows']['1h']['latency']['cold']['p50_seconds']==2
+
+
+def test_warmup_maturity_uses_configured_ttl(tmp_path):
+    from jukes.metrics import Metrics
+    clock=[100000.0]
+    m=Metrics(Store(tmp_path/'ttl.db'),clock=lambda:clock[0],warmup_ttl=30)
+    with m.store.transaction() as c:m.warmup_started('warm',c)
+    m.warmup_completed('warm',clock[0]);clock[0]+=31
+    assert not m.snapshot()['windows']['15m']['warmup_cohort']['maturing']
