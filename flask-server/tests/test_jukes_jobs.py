@@ -419,3 +419,43 @@ def test_unexpected_extraction_exception_is_redacted_in_logs(cache,caplog):
         assert jobs.wait(job.job_id,2).status=='failed'
         assert 'secret cookie value' not in caplog.text
     finally:jobs.shutdown()
+
+
+def test_job_queue_and_extraction_timings_both_recorded(cache):
+    jobs=Jobs(cache,FakeExtractor(),worker_count=1)
+    try:
+        job=jobs.submit(AudioKey('timings','p'),True)
+        jobs.wait(job.job_id,2)
+        latency=cache.metrics.snapshot()['windows']['15m']['latency']
+        assert latency['queue']['sample_count']==1
+        assert latency['extraction']['sample_count']==1
+    finally:jobs.shutdown()
+
+
+def test_rejected_warmup_promotion_is_not_consumption(cache):
+    from dataclasses import replace
+    jobs=Jobs(cache,FakeExtractor(output=b'12345'),worker_count=1)
+    try:
+        job=jobs.submit(AudioKey('oversize-promotion','p'),False)
+        jobs.wait(job.job_id,2)
+        cache.config=replace(cache.config,requested_limit_bytes=2)
+        with pytest.raises(CacheCapacityError):jobs.submit(job.key,True)
+        assert cache.metrics.snapshot()['lifetime'].get('warmup_consumed',0)==0
+    finally:jobs.shutdown()
+
+
+def test_restart_after_publication_finalizes_without_redownload(cache):
+    jobs=Jobs(cache,FakeExtractor(),autostart=False)
+    job=jobs.submit(AudioKey('published-before-crash','p'),True)
+    reservation=cache.reserve(job.key,requested=True)
+    reservation.write(b'published-audio')
+    entry=cache.complete(job.key,reservation.path,True)
+    original=entry.path.read_bytes()
+    restarted=Jobs(cache,FakeExtractor(output=b'corrupt'),worker_count=1)
+    try:
+        recovered=restarted.wait(job.job_id,2)
+        assert recovered.status=='ready'
+        assert entry.path.read_bytes()==original
+        totals=cache.metrics.snapshot()['lifetime']
+        assert totals['job_completed']==1 and totals.get('job_failed',0)==0
+    finally:restarted.shutdown()

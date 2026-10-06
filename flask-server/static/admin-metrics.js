@@ -55,7 +55,7 @@
     const retries=(data)=>(data.retry_fallback||0)+(data.retry_recovery||0);
     panel('Job performance · lifetime',[
       ['Completed extraction jobs',lifetime('job_completed')],['Failed extraction jobs',lifetime('job_failed')],
-      ['Retries (fallback / recovery)',count(retries(life))],['Queued',count(jobs.jobs.queued)],
+      ['Retries (total)',count(retries(life))],['Fallback / recovery retries',count(life.retry_fallback||0)+' / '+count(life.retry_recovery||0)],['Queued',count(jobs.jobs.queued)],
       ['Downloading',count(jobs.jobs.downloading)],['Ready',count(jobs.jobs.ready)],
       ['Failed',count(jobs.jobs.failed)],['Evicted',count(jobs.jobs.evicted)]
     ],'Ready/failed/evicted gauges cover retained jobs. Completed totals remain completed after eviction.');
@@ -65,15 +65,15 @@
       ['P50 preparation',formatSeconds(w.latency.all.p50_seconds)],['P95 preparation',formatSeconds(w.latency.all.p95_seconds)],
       ['P99 preparation',formatSeconds(w.latency.all.p99_seconds)],['Failure rate',formatPercent(w.failure_rate)],
       ['Temporary failures',selected('temporary_failure')],['Terminal failures',selected('terminal_failure')],
-      ['Retries',count(retries(c))],['Admission rejections',selected('admission_rejected')],
+      ['Retries',count(retries(c))],['Fallback / recovery retries',count(c.retry_fallback||0)+' / '+count(c.retry_recovery||0)],['Admission rejections',selected('admission_rejected')],
       ['Expired / evicted / missing results',count((c.eviction||0)+(c.warmup_expiration||0)+(c.missing_result||0))]
     ],'Successful preparation samples: '+w.latency.all.sample_count+(w.latency.all.sampled?' (sampled)':'')+
       '. P99 needs 100 samples. '+m.retry_coverage+'. Lifetime preparations: '+lifetime('prepare_success')+' successful / '+lifetime('prepare_failed')+' failed.');
     panel('Preparation latency by path · selected window',[
-      ...['cached','warmed','joined','cold','recovered'].map(key=>[key+' P50 / P95',formatSeconds(w.latency[key].p50_seconds)+' / '+formatSeconds(w.latency[key].p95_seconds)]),
+      ...['cached','warmed','promoted','joined','cold','recovered'].map(key=>[key+' P50 / P95',formatSeconds(w.latency[key].p50_seconds)+' / '+formatSeconds(w.latency[key].p95_seconds)+' ('+w.latency[key].sample_count+' samples'+(w.latency[key].sampled?', sampled':'')+')']),
       ['Queue wait P95',formatSeconds(w.latency.queue.p95_seconds)],['Extraction + validation P95',formatSeconds(w.latency.extraction.p95_seconds)],
-      ['Dropped latency observations',selected('latency_dropped')]
-    ],'Joined = in-flight work. Cold includes metadata lookup and queue wait. Recovered latency includes downtime; path differences do not prove causal savings.');
+      ['Dropped latency observations',selected('latency_dropped')],['Interrupted outcome unknown',selected('prepare_outcome_unknown')]
+    ],'Promoted = speculative in-flight work; joined = other in-flight work. Cold includes metadata lookup and queue wait. Recovered latency includes downtime; path differences do not prove causal savings.');
     panel('Audio cache effectiveness · selected window',[
       ['Cache hits',selected('cache_hit')],['Cache misses',selected('cache_miss')],['Audio hit rate',formatPercent(w.cache_hit_rate)],
       ['Main cache hits',selected('main_hit')],['Warmup cache hits',selected('warmup_hit')],['Warmup hit share',formatPercent(w.warmup_hit_rate)],

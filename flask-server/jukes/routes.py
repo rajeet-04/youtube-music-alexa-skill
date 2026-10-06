@@ -267,15 +267,7 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
         observation = metrics.begin_preparation(started_at)
         entry = cache.lookup(key)
         joined = jobs.has_active(key)
-        category = 'warmed' if entry and entry.pool=='warmup' else ('cached' if entry else ('joined' if joined else 'cold'))
-        metrics.record('cache_hit' if entry else 'cache_miss')
-        if entry:
-            metrics.record('warmup_hit' if entry.pool=='warmup' else 'main_hit')
-            row = cache.store.get_audio(key)
-            if row:
-                metrics.consume_cached(key,row['completed_at'])
-        elif joined:
-            metrics.record('joined')
+        category = 'warmed' if entry and entry.pool=='warmup' else ('cached' if entry else ('promoted' if joined and jobs.has_speculative(key) else ('joined' if joined else 'cold')))
         try:
             job = submit(key, True)
         except ApiError:
@@ -284,6 +276,14 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
                 c.execute('DELETE FROM jukes_metrics_pending WHERE id=?',(observation,))
             metrics._monotonic_starts.pop(observation,None)
             raise
+        metrics.record('cache_hit' if entry else 'cache_miss')
+        if entry:
+            metrics.record('warmup_hit' if entry.pool=='warmup' else 'main_hit')
+            row = cache.store.get_audio(key)
+            if row:
+                metrics.consume_cached(key,row['completed_at'])
+        elif joined:
+            metrics.record('joined')
         metrics.attach_preparation(observation,job.job_id,category)
         return job
 

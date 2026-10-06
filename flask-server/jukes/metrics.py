@@ -11,8 +11,8 @@ EVENTS = frozenset(('job_completed', 'job_failed', 'prepare_success', 'prepare_f
     'eviction', 'warmup_eviction', 'warmup_expiration', 'missing_result',
     'warmup_request', 'warmup_duplicate', 'warmup_cached', 'warmup_started',
     'warmup_success', 'warmup_consumed', 'warmup_inflight', 'warmup_failed',
-    'admission_rejected', 'latency_dropped', 'job_timing'))
-CATEGORIES = ('all', 'cold', 'cached', 'joined', 'warmed', 'recovered', 'queue', 'extraction')
+    'admission_rejected', 'latency_dropped', 'job_timing', 'prepare_outcome_unknown'))
+CATEGORIES = ('all', 'cold', 'cached', 'joined', 'promoted', 'warmed', 'recovered', 'queue', 'extraction')
 WINDOWS = {'15m': 900, '1h': 3600, '24h': 86400}
 
 
@@ -32,33 +32,48 @@ class Metrics:
                 CREATE TABLE IF NOT EXISTS jukes_metrics_totals(name TEXT PRIMARY KEY, value INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS jukes_metrics_info(name TEXT PRIMARY KEY, value REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS jukes_metrics_minutes(minute INTEGER, name TEXT, category TEXT,
-                    count INTEGER NOT NULL, duration REAL NOT NULL DEFAULT 0, last_at REAL NOT NULL, PRIMARY KEY(minute,name,category));
+                    count INTEGER NOT NULL, duration REAL NOT NULL DEFAULT 0, last_at REAL NOT NULL, duration_count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(minute,name,category));
                 CREATE TABLE IF NOT EXISTS jukes_metrics_samples(id INTEGER PRIMARY KEY, at REAL, category TEXT, duration REAL);
                 CREATE INDEX IF NOT EXISTS jukes_metrics_sample_time ON jukes_metrics_samples(at);
                 CREATE TABLE IF NOT EXISTS jukes_metrics_once(marker TEXT PRIMARY KEY, at REAL);
                 CREATE TABLE IF NOT EXISTS jukes_metrics_pending(id TEXT PRIMARY KEY, job_id TEXT,
                     started_at REAL, category TEXT, elapsed REAL NOT NULL DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS jukes_metrics_overflow(job_id TEXT,category TEXT,count INTEGER NOT NULL,PRIMARY KEY(job_id,category));
                 CREATE INDEX IF NOT EXISTS jukes_metrics_pending_job ON jukes_metrics_pending(job_id);
                 CREATE TABLE IF NOT EXISTS jukes_metrics_warmups(result_id TEXT PRIMARY KEY,
                     completed_at REAL, consumed_at REAL, inflight INTEGER NOT NULL DEFAULT 0);
             ''')
+            if not c.in_transaction:
+                c.execute('BEGIN IMMEDIATE')
+            columns={r['name'] for r in c.execute('PRAGMA table_info(jukes_metrics_minutes)')}
+            if 'duration_count' not in columns:
+                c.execute('ALTER TABLE jukes_metrics_minutes ADD COLUMN duration_count INTEGER NOT NULL DEFAULT 0')
+                c.execute("UPDATE jukes_metrics_minutes SET duration_count=count WHERE name IN ('prepare_success','job_timing')")
+            orphaned=c.execute('SELECT COUNT(*) FROM jukes_metrics_pending WHERE job_id IS NULL OR job_id NOT IN (SELECT job_id FROM jukes_jobs)').fetchone()[0]
+            if orphaned:
+                self.record('prepare_outcome_unknown',amount=orphaned,connection=c)
+                c.execute('DELETE FROM jukes_metrics_pending WHERE job_id IS NULL OR job_id NOT IN (SELECT job_id FROM jukes_jobs)')
             c.execute('INSERT OR IGNORE INTO jukes_metrics_info VALUES (?,?)', ('started_at', clock()))
         self.prune()
 
-    def record(self, name, *, category='all', duration_seconds=None, once=None, connection=None):
+    def record(self, name, *, category='all', duration_seconds=None, once=None, connection=None, amount=1):
         if name not in EVENTS or category not in CATEGORIES:
             raise ValueError('unsupported metric')
         if duration_seconds is not None and (not math.isfinite(duration_seconds) or duration_seconds < 0):
             raise ValueError('invalid duration')
+        if not isinstance(amount,int) or amount < 1:
+            raise ValueError('invalid count')
         now = self.clock()
+        if connection is None and now-self._last_prune>=60:
+            self.prune(now)
         with (nullcontext(connection) if connection is not None else self.store.transaction()) as c:
             if once is not None:
-                if not c.execute('INSERT OR IGNORE INTO jukes_metrics_once VALUES (?,?)', (name+':'+once, now)).rowcount:
+                if not c.execute('INSERT OR IGNORE INTO jukes_metrics_once VALUES (?,?)', (name+':'+category+':'+once, now)).rowcount:
                     return False
-            c.execute('INSERT INTO jukes_metrics_totals VALUES (?,1) ON CONFLICT(name) DO UPDATE SET value=value+1', (name,))
-            c.execute('INSERT INTO jukes_metrics_minutes VALUES (?,?,?,1,?,?) '
-                      'ON CONFLICT(minute,name,category) DO UPDATE SET count=count+1,duration=duration+excluded.duration,last_at=excluded.last_at',
-                      (int(now//60)*60, name, category, duration_seconds or 0, now))
+            c.execute('INSERT INTO jukes_metrics_totals VALUES (?,?) ON CONFLICT(name) DO UPDATE SET value=value+excluded.value', (name,amount))
+            c.execute('INSERT INTO jukes_metrics_minutes VALUES (?,?,?,?,?,?,?) '
+                      'ON CONFLICT(minute,name,category) DO UPDATE SET count=count+excluded.count,duration=duration+excluded.duration,last_at=excluded.last_at,duration_count=duration_count+excluded.duration_count',
+                      (int(now//60)*60, name, category, amount, (duration_seconds or 0)*amount, now, amount if duration_seconds is not None else 0))
             if duration_seconds is not None:
                 c.execute('INSERT INTO jukes_metrics_samples(at,category,duration) VALUES (?,?,?)',
                           (now, category, duration_seconds))
@@ -70,10 +85,10 @@ class Metrics:
     def prune(self, now=None):
         now = self.clock() if now is None else now
         with self.store.transaction() as c:
-            c.execute('DELETE FROM jukes_metrics_minutes WHERE minute < ?', (int((now-86400)//60)*60,))
+            c.execute('DELETE FROM jukes_metrics_minutes WHERE last_at < ?', (now-86400,))
             c.execute('DELETE FROM jukes_metrics_samples WHERE at < ?', (now-86400,))
             # Markers are needed while retained terminal jobs can emit transitions.
-            c.execute('DELETE FROM jukes_metrics_once WHERE at < ?', (now-172800,))
+            c.execute('DELETE FROM jukes_metrics_once WHERE at < ? AND substr(marker,-32) NOT IN (SELECT job_id FROM jukes_jobs)', (now-172800,))
             c.execute('DELETE FROM jukes_metrics_warmups WHERE completed_at < ?', (now-86400-self.warmup_ttl,))
         self._last_prune = now
 
@@ -105,21 +120,23 @@ class Metrics:
                 counters[r['name']] = counters.get(r['name'], 0)+r['count']
             latency = {}
             for category in CATEGORIES:
-                relevant = [r for r in rows if (r['category'] == category or (category == 'all' and r['category'] in ('cold','cached','joined','warmed','recovered'))) and r['name'] == ('job_timing' if category in ('queue','extraction') else 'prepare_success')]
-                count = sum(r['count'] for r in relevant)
-                values = [s['duration'] for s in samples if (s['category'] == category or (category == 'all' and s['category'] in ('cold','cached','joined','warmed','recovered'))) and s['at'] >= cutoff]
+                relevant = [r for r in rows if (r['category'] == category or (category == 'all' and r['category'] in ('cold','cached','joined','promoted','warmed','recovered'))) and r['name'] == ('job_timing' if category in ('queue','extraction') else 'prepare_success')]
+                count = sum(r['duration_count'] for r in relevant)
+                values = [s['duration'] for s in samples if (s['category'] == category or (category == 'all' and s['category'] in ('cold','cached','joined','promoted','warmed','recovered'))) and s['at'] >= cutoff]
                 latency[category] = self._latency(values, count)
                 latency[category]['average_seconds'] = sum(r['duration'] for r in relevant)/count if count else None
             selected = [r for r in cohorts if r['completed_at'] is not None and r['completed_at'] >= cutoff]
             consumed = sum(r['consumed_at'] is not None for r in selected)
             trends = []
-            for minute in sorted({r['minute'] for r in rows}):
-                bucket = [r for r in rows if r['minute'] == minute]
+            grouped = {}
+            for r in rows:
+                grouped.setdefault(r['minute'], []).append(r)
+            for minute,bucket in sorted(grouped.items()):
                 b = {}
                 for r in bucket:
                     b[r['name']] = b.get(r['name'], 0)+r['count']
-                success = [r for r in bucket if r['name']=='prepare_success' and r['category'] in ('cold','cached','joined','warmed','recovered')]
-                n = sum(r['count'] for r in success)
+                success = [r for r in bucket if r['name']=='prepare_success' and r['category'] in ('cold','cached','joined','promoted','warmed','recovered')]
+                n = sum(r['duration_count'] for r in success)
                 trends.append({'at': minute, 'average_seconds': sum(r['duration'] for r in success)/n if n else None,
                     'cache_hit_rate': rate(b.get('cache_hit',0), b.get('cache_hit',0)+b.get('cache_miss',0)),
                     'failure_rate': rate(b.get('prepare_failed',0), b.get('prepare_failed',0)+b.get('prepare_success',0)),
@@ -147,10 +164,11 @@ class Metrics:
         return observation
 
     def attach_preparation(self, observation_id, job_id, category):
-        if observation_id is None:
-            return
         with self.store.transaction() as c:
-            c.execute('UPDATE jukes_metrics_pending SET job_id=?,category=? WHERE id=?', (job_id,category,observation_id))
+            if observation_id is None:
+                c.execute('INSERT INTO jukes_metrics_overflow VALUES (?,?,1) ON CONFLICT(job_id,category) DO UPDATE SET count=count+1',(job_id,category))
+            else:
+                c.execute('UPDATE jukes_metrics_pending SET job_id=?,category=? WHERE id=?', (job_id,category,observation_id))
             job = c.execute('SELECT status,error_code,recovery_count FROM jukes_jobs WHERE job_id=?', (job_id,)).fetchone()
             if job and job['status'] in ('ready','failed','evicted'):
                 self.finish_job(job_id, job['status'], job['error_code'], bool(job['recovery_count']), connection=c)
@@ -159,6 +177,13 @@ class Metrics:
         if status not in ('ready','failed','evicted'):
             return
         with (nullcontext(connection) if connection is not None else self.store.transaction()) as c:
+            for overflow in c.execute('SELECT * FROM jukes_metrics_overflow WHERE job_id=?',(job_id,)).fetchall():
+                if status!='evicted':
+                    self.record('prepare_success' if status=='ready' else 'prepare_failed',category=overflow['category'],amount=overflow['count'],connection=c)
+                    if status=='failed':
+                        terminal=error_code in ('video_unavailable','public_audio_required','invalid_media','track_too_large','warmup_too_large')
+                        self.record('terminal_failure' if terminal else 'temporary_failure',amount=overflow['count'],connection=c)
+                c.execute('DELETE FROM jukes_metrics_overflow WHERE job_id=? AND category=?',(job_id,overflow['category']))
             rows = c.execute('SELECT * FROM jukes_metrics_pending WHERE job_id=?', (job_id,)).fetchall()
             for row in rows:
                 if status != 'evicted':
@@ -175,6 +200,9 @@ class Metrics:
 
     def finish_preparation(self, observation_id, *, success, duration_seconds, retryable=False):
         if observation_id is None:
+            self.record('prepare_success' if success else 'prepare_failed')
+            if not success:
+                self.record('temporary_failure' if retryable else 'terminal_failure')
             return
         with self.store.transaction() as c:
             row = c.execute('SELECT * FROM jukes_metrics_pending WHERE id=?', (observation_id,)).fetchone()

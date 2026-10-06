@@ -483,7 +483,7 @@ def test_metrics_join_and_inflight_promotion(env):
     assert m['lifetime']['warmup_consumed'] == 1
     assert m['lifetime'].get('warmup_hit', 0) == 0
     assert m['lifetime']['prepare_success'] == 1
-    assert m['windows']['15m']['latency']['joined']['sample_count'] == 1
+    assert m['windows']['15m']['latency']['promoted']['sample_count'] == 1
 
 
 def test_warmup_direct_audio_consumption_promotes_once(env):

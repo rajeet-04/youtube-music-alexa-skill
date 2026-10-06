@@ -108,3 +108,36 @@ def test_warmup_maturity_uses_configured_ttl(tmp_path):
     with m.store.transaction() as c:m.warmup_started('warm',c)
     m.warmup_completed('warm',clock[0]);clock[0]+=31
     assert not m.snapshot()['windows']['15m']['warmup_cohort']['maturing']
+
+
+def test_normal_traffic_prunes_without_admin_visits(tmp_path):
+    clock=[100000.0];m=collector(tmp_path,clock)
+    m.record('job_completed',once='old')
+    clock[0]+=86401
+    m.record('job_completed',once='new')
+    with m.store.connection() as c:
+        assert c.execute('SELECT MIN(minute) FROM jukes_metrics_minutes').fetchone()[0]>=186360
+    assert m.snapshot()['lifetime']['job_completed']==2
+
+
+def test_observer_saturation_keeps_outcomes_without_latency(tmp_path):
+    clock=[100000.0];m=collector(tmp_path,clock)
+    with m.store.transaction() as c:
+        c.executemany("INSERT INTO jukes_metrics_pending(id,started_at,category) VALUES (?,?,'cold')",
+            [(str(n),clock[0]) for n in range(10000)])
+        c.execute("INSERT INTO jukes_jobs VALUES ('full','v','p',1,'queued',NULL,1,2,0,0,'')")
+    observation=m.begin_preparation(clock[0]);assert observation is None
+    m.attach_preparation(observation,'full','cold')
+    m.finish_job('full','ready')
+    snapshot=m.snapshot()
+    assert snapshot['lifetime']['prepare_success']==1
+    assert snapshot['windows']['15m']['latency']['cold']['sample_count']==0
+    assert snapshot['windows']['15m']['latency']['cold']['average_seconds'] is None
+
+
+def test_recovery_reclaims_orphaned_pending_observers(tmp_path):
+    clock=[100000.0];m=collector(tmp_path,clock)
+    m.begin_preparation(clock[0])
+    restarted=collector(tmp_path,clock)
+    with restarted.store.connection() as c:
+        assert c.execute('SELECT COUNT(*) FROM jukes_metrics_pending').fetchone()[0]==0

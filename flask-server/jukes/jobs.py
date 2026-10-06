@@ -84,6 +84,8 @@ class Jobs:
         self._running = 0
         self._stopping = False
         self._threads: list[threading.Thread] = []
+        self._last_prune = self._clock()
+        self._queued_mono = {}
         self._pid = cache._pid
         self._owner_start = cache._process_start_token
         if autostart:
@@ -94,6 +96,7 @@ class Jobs:
         with self._cond:
             if self._threads:
                 return
+            self.prune()
             self._recover()
             for index in range(self.worker_count):
                 thread = threading.Thread(target=self._worker, name=f"jukes-worker-{index}", daemon=True)
@@ -182,6 +185,15 @@ class Jobs:
             key = AudioKey(row["video_id"], row["policy"])
             job = Job(row["job_id"], key, bool(row["requested"]), "queued", row["created_at"],
                       self._clock(), None, int(row["recovery_count"]))
+            ready_entry = self.cache.lookup(key)
+            if ready_entry is not None:
+                if job.requested:
+                    self.cache.promote(key)
+                job = replace(job,status='ready',updated_at=self._clock())
+                self._jobs[job.job_id] = job
+                self._by_key[key] = job.job_id
+                self._persist(job)
+                continue
             self.cache.release_reservation(key)
             if job.recovery_count >= 1:
                 job = replace(job, status="failed", error_code="interrupted")
@@ -204,6 +216,8 @@ class Jobs:
 
     # -- public API ----------------------------------------------------
     def submit(self, key: AudioKey, requested: bool) -> Job:
+        if self._clock()-self._last_prune>=60:
+            self.prune()
         with self._cond:
             if self._stopping:
                 raise JobQueueFull("coordinator is shutting down")
@@ -213,9 +227,10 @@ class Jobs:
             if existing is not None:
                 if not requested:
                     self.metrics.record('warmup_cached' if existing.status=='ready' else 'warmup_duplicate')
+                attached = self._attach(existing, requested)
                 if requested:
                     self.metrics.consume_warmup(existing.job_id, inflight=existing.status in ACTIVE)
-                return self._attach(existing, requested)
+                return attached
             if len(self._requested_queue) + len(self._warmup_queue) >= self.max_queue_size:
                 raise JobQueueFull("download queue is full")
             now = self._clock()
@@ -294,6 +309,14 @@ class Jobs:
                     "queue_utilization": (len(self._requested_queue)+len(self._warmup_queue))/self.max_queue_size if self.max_queue_size else 0,
                     "worker_utilization": self._running/self.worker_count}
 
+    def has_speculative(self, key: AudioKey) -> bool:
+        with self._cond:
+            job_id=self._by_key.get(key)
+            if job_id is None or self._jobs[job_id].status not in ACTIVE:
+                return False
+            with self.cache.store.connection() as c:
+                return c.execute('SELECT 1 FROM jukes_metrics_warmups WHERE result_id=?',(job_id,)).fetchone() is not None
+
     def has_active(self, key: AudioKey) -> bool:
         """True while a queued or running job already covers ``key``."""
         with self._cond:
@@ -321,7 +344,8 @@ class Jobs:
 
     def prune(self, now: float | None = None) -> int:
         """Forget terminal jobs older than 24 hours (audio is unaffected)."""
-        cutoff = (now if now is not None else self._clock()) - TERMINAL_RETENTION_SECONDS
+        current_time = now if now is not None else self._clock()
+        cutoff = current_time - TERMINAL_RETENTION_SECONDS
         with self._cond:
             stale = [j.job_id for j in self._jobs.values()
                      if j.status in ("ready", "failed", "evicted") and j.updated_at < cutoff]
@@ -333,10 +357,12 @@ class Jobs:
             connection.execute("DELETE FROM jukes_job_results WHERE job_id IN (SELECT job_id FROM jukes_jobs WHERE status IN ('ready','failed','evicted') AND updated_at<?)",(cutoff,))
             connection.execute(
                 "DELETE FROM jukes_jobs WHERE status IN ('ready', 'failed', 'evicted') AND updated_at < ?", (cutoff,))
+        self._last_prune=current_time
         return len(stale)
 
     # -- dispatch ------------------------------------------------------
     def _enqueue(self, job: Job) -> None:
+        self._queued_mono[job.job_id] = time.monotonic()
         (self._requested_queue if job.requested else self._warmup_queue).append(job.job_id)
         self._cond.notify_all()
 
@@ -363,7 +389,7 @@ class Jobs:
                     return
                 self._running += 1
                 job = self._set(job_id, status="downloading")
-                self.metrics.record('job_timing', category='queue', duration_seconds=max(0,self._clock()-job.created_at),once=job_id)
+                self.metrics.record('job_timing', category='queue', duration_seconds=max(0,time.monotonic()-self._queued_mono.pop(job_id,time.monotonic())),once=job_id)
             try:
                 self._run(job)
             finally:
@@ -386,13 +412,14 @@ class Jobs:
     def _run(self, job: Job) -> None:
         key = job.key
         error_code: str | None = None
-        run_started = self._clock()
+        run_started = time.monotonic()
         try:
             reservation = self.cache.reserve(key, requested=self._current(job.job_id).requested)
-            snapshot = self._snapshot()
-            result = self.extractor.download(key, reservation, snapshot)
-            requested = self._current(job.job_id).requested
-            self.cache.complete(key, result.path, requested=requested)
+            if reservation.cached_entry is None:
+                snapshot = self._snapshot()
+                result = self.extractor.download(key, reservation, snapshot)
+                requested = self._current(job.job_id).requested
+                self.cache.complete(key, result.path, requested=requested)
         except ExtractionError as error:
             error_code = error.code
             if error.cookie_suspect and self.on_cookie_suspect is not None:
@@ -411,7 +438,7 @@ class Jobs:
             if self._stopping and error_code is not None:
                 return  # leave persisted state recoverable
             if error_code is None:
-                self.metrics.record('job_timing',category='extraction',duration_seconds=max(0,self._clock()-run_started),once=job.job_id)
+                self.metrics.record('job_timing',category='extraction',duration_seconds=max(0,time.monotonic()-run_started),once=job.job_id)
                 self._set(job.job_id, status="ready", error_code=None)
             else:
                 self._set(job.job_id, status="failed", error_code=error_code)
