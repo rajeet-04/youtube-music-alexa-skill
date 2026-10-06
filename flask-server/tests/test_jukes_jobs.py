@@ -261,7 +261,7 @@ def test_cancelling_waiter_does_not_cancel_shared_download(cache: Cache) -> None
         jobs.shutdown()
 
 
-def test_ready_job_becomes_failed_if_cache_entry_was_evicted(cache: Cache) -> None:
+def test_ready_job_becomes_evicted_if_cache_entry_was_evicted(cache: Cache) -> None:
     jobs = Jobs(cache, FakeExtractor(), worker_count=1)
     key = AudioKey("evicted", "p1")
     try:
@@ -272,7 +272,7 @@ def test_ready_job_becomes_failed_if_cache_entry_was_evicted(cache: Cache) -> No
         assert cached is not None
         Path(cached["path"]).unlink()
         cache.reconcile()
-        assert jobs.get(original.job_id).status == "failed"
+        assert jobs.get(original.job_id).status == "evicted"
         assert jobs.get(original.job_id).error_code == "cache_evicted"
 
         replacement = jobs.submit(key, requested=False)
@@ -339,3 +339,50 @@ def test_provider_unavailable_uses_anonymous_snapshot(cache: Cache) -> None:
         assert extractor.seen_snapshot is None
     finally:
         jobs.shutdown()
+
+
+def test_evicted_job_is_not_failed(cache):
+    jobs = Jobs(cache, FakeExtractor(), worker_count=1)
+    try:
+        job = jobs.submit(AudioKey('evict-me', 'p1'), requested=True)
+        assert jobs.wait(job.job_id, 2).status == 'ready'
+        entry = cache.lookup(job.key)
+        entry.path.unlink()
+        assert jobs.get(job.job_id).status == 'evicted'
+        stats = jobs.stats()
+        assert stats['jobs']['evicted'] == 1
+        assert stats['jobs']['failed'] == 0
+        assert stats['active_workers'] == 0
+        assert stats['worker_utilization'] == 0
+        assert jobs.submit(job.key, True).job_id != job.job_id
+    finally:
+        jobs.shutdown()
+
+
+def test_old_result_eviction_preserves_new_job(cache):
+    jobs = Jobs(cache, FakeExtractor(), worker_count=1)
+    try:
+        old = jobs.submit(AudioKey('replace', 'p1'), True)
+        jobs.wait(old.job_id, 2)
+        cache.lookup(old.key).path.unlink()
+        new = jobs.submit(old.key, True)
+        jobs.wait(new.job_id, 2)
+        assert jobs.get(old.job_id).status == 'evicted'
+        assert jobs.get(new.job_id).status == 'ready'
+    finally:
+        jobs.shutdown()
+
+
+def test_evicted_state_migration_preserves_legacy_tables(tmp_path):
+    from jukes.store import Store
+    path = tmp_path / 'old.db'
+    db = sqlite3.connect(path)
+    db.executescript("CREATE TABLE unrelated (value TEXT); INSERT INTO unrelated VALUES ('keep');")
+    db.close()
+    store = Store(path)
+    with store.transaction() as c:
+        c.execute("INSERT INTO jukes_jobs VALUES ('j','v','p',1,'failed','cache_evicted',1,2,0,0,'')")
+    store = Store(path)
+    with store.connection() as c:
+        assert c.execute("SELECT status FROM jukes_jobs WHERE job_id='j'").fetchone()[0] == 'evicted'
+        assert c.execute('SELECT value FROM unrelated').fetchone()[0] == 'keep'

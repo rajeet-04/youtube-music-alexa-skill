@@ -34,6 +34,7 @@ JOB_ERRORS = {
     "rate_limited": (503, True),
     "cache_capacity": (503, True),
     "cache_evicted": (503, True),
+    "warmup_expired": (503, True),
     "interrupted": (503, True),
     "video_temporarily_unavailable": (503, True),
     "extraction_timeout": (502, True),
@@ -283,7 +284,7 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
                                 "status": job.status, "pool": pool_of(job)}
         if job.status == "ready":
             view["audio_url"] = f"{base_url()}/v1/audio/{job.key.video_id}"
-        if job.status == "failed":
+        if job.status in ("failed", "evicted"):
             _, retryable = JOB_ERRORS.get(job.error_code or "", (502, True))
             view["error"] = {"code": job.error_code, "retryable": retryable}
         return view
@@ -391,7 +392,7 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
         if job.status == "ready":  # published between the lookup and submit
             if (response := serve(key, touch=True)) is not None:
                 return response
-        if job.status == "failed":
+        if job.status in ("failed", "evicted"):
             raise job_error(job)
         raise ApiError(503, "pending", "audio is being prepared", True)
 
@@ -526,6 +527,6 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
             headers["X-Cache"] = "MISS"
             if (response := serve(key, touch=True, headers=headers)) is not None:
                 return response
-        if job.status == "failed":
+        if job.status in ("failed", "evicted"):
             raise job_error(job)
         raise ApiError(503, "pending", "audio is being prepared", True)

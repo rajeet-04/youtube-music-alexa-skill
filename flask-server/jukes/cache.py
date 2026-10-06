@@ -152,6 +152,11 @@ class Cache:
                 "DELETE FROM jukes_audio WHERE video_id = ? AND policy = ?",
                 (key.video_id, key.policy),
             )
+            connection.execute("UPDATE jukes_jobs SET status='evicted', error_code=?, updated_at=? "
+                "WHERE video_id=? AND policy=? AND status='ready' AND job_id IN "
+                "(SELECT job_id FROM jukes_job_results WHERE completed_at=?)",
+                ('warmup_expired' if self._is_expired(row, self.clock()) else 'cache_evicted',
+                 self.clock(), key.video_id, key.policy, row['completed_at']))
         return True
 
     @staticmethod

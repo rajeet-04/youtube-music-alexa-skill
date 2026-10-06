@@ -106,6 +106,17 @@ class Store:
                     ON jukes_jobs(status, updated_at);
                 """
             )
+            job_sql = connection.execute("SELECT sql FROM sqlite_master WHERE name='jukes_jobs'").fetchone()[0]
+            if "'evicted'" not in job_sql:
+                indexes = [r[0] for r in connection.execute("SELECT sql FROM sqlite_master WHERE tbl_name='jukes_jobs' AND type='index' AND sql IS NOT NULL")]
+                connection.execute("ALTER TABLE jukes_jobs RENAME TO jukes_jobs_old")
+                connection.execute(job_sql.replace("'ready', 'failed'", "'ready', 'failed', 'evicted'"))
+                connection.execute("INSERT INTO jukes_jobs SELECT * FROM jukes_jobs_old")
+                connection.execute("DROP TABLE jukes_jobs_old")
+                for index in indexes:
+                    connection.execute(index)
+            connection.execute("UPDATE jukes_jobs SET status='evicted' WHERE status='failed' AND error_code='cache_evicted'")
+            connection.execute("CREATE TABLE IF NOT EXISTS jukes_job_results(job_id TEXT PRIMARY KEY, completed_at REAL NOT NULL)")
             reservation_columns = {
                 str(row["name"])
                 for row in connection.execute("PRAGMA table_info(jukes_reservations)").fetchall()

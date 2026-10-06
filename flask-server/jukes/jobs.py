@@ -118,6 +118,7 @@ class Jobs:
 
     # -- persistence ---------------------------------------------------
     def _persist(self, job: Job, *, new: bool = False) -> None:
+        result = self.cache.store.get_audio(job.key) if job.status == 'ready' else None
         with self.cache.store.transaction() as connection:
             if new:
                 connection.execute(
@@ -136,6 +137,9 @@ class Jobs:
                      job.recovery_count, self._pid, self._owner_start, job.job_id),
                 )
 
+            if result is not None:
+                connection.execute("INSERT OR REPLACE INTO jukes_job_results VALUES (?,?)", (job.job_id, result['completed_at']))
+
     def _set(self, job_id: str, **changes: Any) -> Job:
         job = replace(self._jobs[job_id], updated_at=self._clock(), **changes)
         self._jobs[job_id] = job
@@ -149,6 +153,10 @@ class Jobs:
             rows = connection.execute(
                 "SELECT * FROM jukes_jobs WHERE status IN ('queued', 'downloading') ORDER BY created_at"
             ).fetchall()
+        with self.cache.store.connection() as c:
+            for row in c.execute("SELECT * FROM jukes_jobs WHERE status IN ('ready','failed','evicted')"):
+                self._jobs[row['job_id']] = Job(row['job_id'], AudioKey(row['video_id'],row['policy']),
+                    bool(row['requested']),row['status'],row['created_at'],row['updated_at'],row['error_code'],row['recovery_count'])
         for row in rows:
             owner_pid, owner_start = int(row["owner_pid"]), str(row["owner_start"])
             if owner_pid > 0 and owner_start and (owner_pid, owner_start) != (self._pid, self._owner_start) \
@@ -230,10 +238,15 @@ class Jobs:
         job = self._jobs.get(job_id)
         if job is None:
             return None
+        if job.status == "ready":
+            with self.cache.store.connection() as c:
+                row = c.execute("SELECT status,error_code FROM jukes_jobs WHERE job_id=?", (job_id,)).fetchone()
+            if row is not None and row['status'] == 'evicted':
+                self._jobs[job_id] = job = replace(job, status='evicted', error_code=row['error_code'])
         if job.status == "ready" and self.cache.lookup(job.key) is None:
-            self._set(job_id, status="failed", error_code="cache_evicted")
+            self._set(job_id, status="evicted", error_code="cache_evicted")
             job = self._jobs[job_id]
-        if job.status == "failed":
+        if job.status in ("failed", "evicted"):
             if self._by_key.get(job.key) == job_id:
                 del self._by_key[job.key]
             return None
@@ -242,14 +255,18 @@ class Jobs:
     def stats(self) -> dict[str, Any]:
         """Redacted queue counters for the admin view."""
         with self._cond:
-            counts = {"queued": 0, "downloading": 0, "ready": 0, "failed": 0}
+            counts = {"queued": 0, "downloading": 0, "ready": 0, "failed": 0, "evicted": 0}
             errors: dict[str, int] = {}
+            for job_id in list(self._jobs):
+                self._refresh(job_id)
             for job in self._jobs.values():
                 counts[job.status] = counts.get(job.status, 0) + 1
                 if job.status == "failed" and job.error_code:
                     errors[job.error_code] = errors.get(job.error_code, 0) + 1
             return {"jobs": counts, "failure_codes": errors, "workers": self.worker_count,
-                    "queue_limit": self.max_queue_size}
+                    "queue_limit": self.max_queue_size, "active_workers": self._running,
+                    "queue_utilization": (len(self._requested_queue)+len(self._warmup_queue))/self.max_queue_size if self.max_queue_size else 0,
+                    "worker_utilization": self._running/self.worker_count}
 
     def has_active(self, key: AudioKey) -> bool:
         """True while a queued or running job already covers ``key``."""
@@ -281,14 +298,14 @@ class Jobs:
         cutoff = (now if now is not None else self._clock()) - TERMINAL_RETENTION_SECONDS
         with self._cond:
             stale = [j.job_id for j in self._jobs.values()
-                     if j.status in ("ready", "failed") and j.updated_at < cutoff]
+                     if j.status in ("ready", "failed", "evicted") and j.updated_at < cutoff]
             for job_id in stale:
                 job = self._jobs.pop(job_id)
                 if self._by_key.get(job.key) == job_id:
                     del self._by_key[job.key]
         with self.cache.store.transaction() as connection:
             connection.execute(
-                "DELETE FROM jukes_jobs WHERE status IN ('ready', 'failed') AND updated_at < ?", (cutoff,))
+                "DELETE FROM jukes_jobs WHERE status IN ('ready', 'failed', 'evicted') AND updated_at < ?", (cutoff,))
         return len(stale)
 
     # -- dispatch ------------------------------------------------------
