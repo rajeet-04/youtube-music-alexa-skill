@@ -110,6 +110,7 @@ def create_app(config: Settings | None = None, services: Services | None = None,
     default_build = services is None
     services = services or build_services()
     app.extensions["jukes"] = services
+    app.extensions["jukes_metrics"] = services.cache.metrics
     register_routes(app, services, settings)
     register_health(app, services)
 

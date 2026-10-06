@@ -13,6 +13,7 @@ from typing import Callable, Iterator
 from .config import CacheConfig
 from .models import AudioKey, CacheCapacityError, CacheEntry, PruneResult
 from .store import Store
+from .metrics import Metrics
 
 
 _COORDINATOR_LOCK = threading.RLock()
@@ -72,6 +73,7 @@ class Cache:
         self.files_dir.mkdir(parents=True, exist_ok=True)
         self.staging_dir.mkdir(parents=True, exist_ok=True)
         self.store = store or Store(config.database_path)
+        self.metrics = Metrics(self.store, clock=clock)
         self.media_validator = media_validator or self._default_media_validator
         self._pid = os.getpid()
         self._process_start_token = _process_start(self._pid) or "unknown"
@@ -143,6 +145,7 @@ class Cache:
                     (key.video_id, key.policy),
                 )
             return True
+        missing = not path.exists()
         try:
             path.unlink(missing_ok=True)
         except OSError:
@@ -157,6 +160,16 @@ class Cache:
                 "(SELECT job_id FROM jukes_job_results WHERE completed_at=?)",
                 ('warmup_expired' if self._is_expired(row, self.clock()) else 'cache_evicted',
                  self.clock(), key.video_id, key.policy, row['completed_at']))
+            marker = self._digest(key)+':'+str(row['completed_at'])
+            if self._is_expired(row, self.clock()):
+                event = 'warmup_expiration'
+            elif missing:
+                event = 'missing_result'
+            else:
+                event = 'eviction'
+            self.metrics.record(event, once=marker, connection=connection)
+            if row['pool'] == 'warmup' and event == 'eviction':
+                self.metrics.record('warmup_eviction', once=marker, connection=connection)
         return True
 
     @staticmethod
@@ -777,3 +790,14 @@ class Cache:
                     except OSError:
                         pass
             return PruneResult(removed_entries=removed_entries, removed_bytes=removed_bytes)
+
+    def operational_snapshot(self):
+        usage = self.usage()
+        with self.store.connection() as c:
+            rows = c.execute("SELECT pool, SUM(size_bytes) AS bytes,COUNT(*) AS entries,AVG(?-completed_at) AS age FROM jukes_audio GROUP BY pool", (self.clock(),)).fetchall()
+        ready = {r['pool']: dict(r) for r in rows}
+        return {pool: {'used_bytes':usage[pool], 'ready_bytes':ready.get(pool,{}).get('bytes',0),
+            'reserved_bytes':max(0,usage[pool]-ready.get(pool,{}).get('bytes',0)),
+            'entries':ready.get(pool,{}).get('entries',0), 'average_age_seconds':ready.get(pool,{}).get('age'),
+            'limit_bytes':self._pool_limit(pool), 'ttl_seconds':self.config.warmup_ttl_seconds if pool=='warmup' else None}
+            for pool in ('requested','warmup')}

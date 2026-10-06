@@ -436,3 +436,51 @@ def test_audio_url_prefers_cloudflare_visitor_scheme_from_trusted_proxy(env):
     bad = dict(hdr, **{"CF-Visitor": "not json"})
     url = app.test_client().post("/v1/audio/prepare", json={"video_id": VID}, headers=bad).get_json()["audio_url"]
     assert url.startswith("http://ms.example.test")  # falls back to X-Forwarded-Proto
+
+
+def test_metrics_cold_cached_and_poll_accounting(env):
+    prepared(env)
+    m = env.app.extensions['jukes_metrics']
+    first = m.snapshot()['lifetime']
+    assert first['job_completed'] == 1
+    assert first['prepare_success'] == 1
+    prepared(env)
+    before = m.snapshot()['lifetime']
+    assert before['cache_hit'] == 1 and before['cache_miss'] == 1
+    job = post(env, '/v1/audio/prepare', {'video_id': VID}).get_json()['job_id']
+    for _ in range(3):
+        env.client.get('/v1/jobs/'+job)
+        env.client.head('/v1/audio/'+VID)
+    after = m.snapshot()['lifetime']
+    assert after['prepare_success'] == 3
+    assert after['job_completed'] == 1
+    assert after['cache_hit'] == 2
+
+
+def test_metrics_warmup_first_consumption_not_range_reads(env):
+    response = post(env, '/v1/warmup', {'video_id': VID})
+    wait_ready(env, response.get_json()['job_id'])
+    prepared(env)
+    for _ in range(3):
+        env.client.get('/v1/audio/'+VID, headers={'Range':'bytes=0-15'})
+    m = env.app.extensions['jukes_metrics'].snapshot()
+    assert m['lifetime']['warmup_request'] == 1
+    assert m['lifetime']['warmup_success'] == 1
+    assert m['lifetime']['warmup_consumed'] == 1
+    assert m['lifetime']['warmup_hit'] == 1
+    assert m['windows']['15m']['warmup_cohort']['usefulness'] == 1
+
+
+def test_metrics_join_and_inflight_promotion(env):
+    env.extractor.gate = threading.Event()
+    warm = post(env, '/v1/warmup', {'video_id': VID})
+    requested = post(env, '/v1/audio/prepare', {'video_id': VID})
+    assert warm.get_json()['job_id'] == requested.get_json()['job_id']
+    env.extractor.gate.set()
+    wait_ready(env, requested.get_json()['job_id'])
+    m = env.app.extensions['jukes_metrics'].snapshot()
+    assert m['lifetime']['warmup_inflight'] == 1
+    assert m['lifetime']['warmup_consumed'] == 1
+    assert m['lifetime'].get('warmup_hit', 0) == 0
+    assert m['lifetime']['prepare_success'] == 1
+    assert m['windows']['15m']['latency']['joined']['sample_count'] == 1

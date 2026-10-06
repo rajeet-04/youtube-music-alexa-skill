@@ -48,3 +48,41 @@ def test_bounded_samples_and_allowlist(tmp_path):
         m.record('cookie=secret')
     with pytest.raises(ValueError):
         m.record('prepare_success', category='authorization:secret')
+
+
+def test_warmup_cohort_does_not_mix_old_completions_with_new_consumption(tmp_path):
+    clock = [100000.0]
+    m = collector(tmp_path,clock)
+    with m.store.transaction() as c:
+        m.warmup_started('old',c)
+    m.warmup_completed('old',clock[0])
+    clock[0] += 1000
+    assert m.consume_warmup('old')
+    with m.store.transaction() as c:
+        m.warmup_started('new',c)
+    m.warmup_completed('new',clock[0])
+    cohort = m.snapshot()['windows']['15m']['warmup_cohort']
+    assert cohort['completed']==1 and cohort['consumed']==0 and cohort['usefulness']==0
+    assert not m.consume_warmup('old')
+
+
+def test_failed_jobs_and_evictions_do_not_inflate_prepare_success(tmp_path):
+    clock=[100000.0]; m=collector(tmp_path,clock)
+    observation=m.begin_preparation(clock[0])
+    with m.store.transaction() as c:
+        c.execute("INSERT INTO jukes_jobs VALUES ('job','v','p',1,'failed','video_unavailable',1,2,0,0,'')")
+    m.attach_preparation(observation,'job','cold')
+    totals=m.snapshot()['lifetime']
+    assert totals['prepare_failed']==1 and totals['terminal_failure']==1
+    assert totals.get('prepare_success',0)==0
+    m.finish_job('job','evicted','cache_evicted')
+    assert m.snapshot()['lifetime']['prepare_failed']==1
+
+
+def test_pending_observations_are_bounded(tmp_path):
+    clock=[100000.0]; m=collector(tmp_path,clock)
+    with m.store.transaction() as c:
+        c.executemany("INSERT INTO jukes_metrics_pending(id,started_at,category) VALUES (?,?,'cold')",
+            [(str(n),clock[0]) for n in range(10000)])
+    assert m.begin_preparation(clock[0]) is None
+    assert m.snapshot()['lifetime']['latency_dropped']==1

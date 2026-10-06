@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Callable
 from urllib.parse import parse_qs, quote, unquote, urlparse
@@ -260,6 +261,36 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
         except MusicError as error:
             raise ApiError(MUSIC_STATUS.get(error.code, 502), error.code, str(error), error.retryable) from None
 
+    metrics = cache.metrics
+
+    def observed_submit(key, started_at):
+        observation = metrics.begin_preparation(started_at)
+        entry = cache.lookup(key)
+        joined = jobs.has_active(key)
+        category = 'warmed' if entry and entry.pool=='warmup' else ('cached' if entry else ('joined' if joined else 'cold'))
+        metrics.record('cache_hit' if entry else 'cache_miss')
+        if entry:
+            metrics.record('warmup_hit' if entry.pool=='warmup' else 'main_hit')
+            row = cache.store.get_audio(key)
+            if row:
+                metrics.consume_cached(key,row['completed_at'])
+        elif joined:
+            metrics.record('joined')
+        try:
+            job = submit(key, True)
+        except ApiError:
+            metrics.record('admission_rejected')
+            with cache.store.transaction() as c:
+                c.execute('DELETE FROM jukes_metrics_pending WHERE id=?',(observation,))
+            raise
+        metrics.attach_preparation(observation,job.job_id,category)
+        return job
+
+    def consume_ready(key):
+        row = cache.store.get_audio(key)
+        if row:
+            metrics.consume_cached(key,row['completed_at'])
+
     def submit(key: AudioKey, requested: bool) -> Job:
         try:
             return jobs.submit(key, requested=requested)
@@ -341,14 +372,21 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
         throttle("http", settings.http_per_minute)
         ctx = context()
         selector = selector_from_body()
-        track = resolve(selector, ctx)
+        started_at = time.time()
+        try:
+            track = resolve(selector, ctx)
+        except ApiError as error:
+            if requested:
+                observation = metrics.begin_preparation(started_at)
+                metrics.finish_preparation(observation,success=False,duration_seconds=time.time()-started_at,retryable=error.retryable)
+            raise
         key = AudioKey(track.video_id, AUDIO_POLICY)
         if not jobs.has_active(key) and cache.lookup(key) is None:  # only genuinely new work
             if requested:
                 throttle("requested", settings.requested_per_minute)
             else:
                 throttle("warmup", settings.warmup_per_minute)
-        job = submit(key, requested)
+        job = observed_submit(key, started_at) if requested else submit(key, False)
         body = {**track.as_dict(), **job_view(job), "personalization_status": ctx.personalization_status}
         response = jsonify(body)
         response.status_code = 200 if job.status == "ready" else 202
@@ -387,8 +425,9 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
             return response
         response = serve(key, touch=True)
         if response is not None:
+            consume_ready(key)
             return response
-        job = submit(key, True)
+        job = observed_submit(key, time.time())
         if job.status == "ready":  # published between the lookup and submit
             if (response := serve(key, touch=True)) is not None:
                 return response
@@ -477,6 +516,7 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
     # -- legacy /audio/ ------------------------------------------------
     @app.route("/audio/", methods=["GET", "HEAD"])
     def legacy_audio():
+        started_at = time.time()
         args = request.args
         meta: Track | None = None
         video_id = args.get("video_id")
@@ -520,8 +560,9 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
 
         response = serve(key, touch=True, headers=headers)
         if response is not None:
+            consume_ready(key)
             return response
-        job = submit(key, True)
+        job = observed_submit(key, started_at)
         job = jobs.wait(job.job_id, settings.legacy_wait_seconds) or job
         if job.status == "ready":
             headers["X-Cache"] = "MISS"

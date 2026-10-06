@@ -399,3 +399,23 @@ def test_lease_pins_audio_when_free_disk_is_low(cache: Cache, clock: FakeClock) 
     accepted = cache.complete(incoming_key, incoming_path, requested=True)
     assert accepted.key == incoming_key
     assert cache.lookup(pinned_key) is None
+
+
+def test_metrics_eviction_and_expiration_are_separate(tmp_path):
+    from jukes.config import CacheConfig
+    from jukes.cache import Cache
+    from jukes.models import AudioKey
+    now=[100000.0]
+    config=CacheConfig(database_path=tmp_path/'m.db',audio_dir=tmp_path/'a',
+        warmup_limit_bytes=8,requested_limit_bytes=100,min_free_disk_bytes=0,
+        unknown_size_reservation_bytes=4,reservation_increment_bytes=4)
+    cache=Cache(config,clock=lambda:now[0])
+    for vid in ('first','second'):
+        key=AudioKey(vid,'p'); r=cache.reserve(key,requested=False)
+        r.write(b'12345678'); cache.complete(key,r.path,False)
+    total=cache.metrics.snapshot()['lifetime']
+    assert total['eviction']==1 and total['warmup_eviction']==1
+    now[0]+=7201
+    cache.prune(now[0])
+    total=cache.metrics.snapshot()['lifetime']
+    assert total['warmup_expiration']==1 and total['eviction']==1

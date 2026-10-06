@@ -11,7 +11,7 @@ EVENTS = frozenset(('job_completed', 'job_failed', 'prepare_success', 'prepare_f
     'eviction', 'warmup_eviction', 'warmup_expiration', 'missing_result',
     'warmup_request', 'warmup_duplicate', 'warmup_cached', 'warmup_started',
     'warmup_success', 'warmup_consumed', 'warmup_inflight', 'warmup_failed',
-    'admission_rejected', 'latency_dropped'))
+    'admission_rejected', 'latency_dropped', 'job_timing'))
 CATEGORIES = ('all', 'cold', 'cached', 'joined', 'warmed', 'recovered', 'queue', 'extraction')
 WINDOWS = {'15m': 900, '1h': 3600, '24h': 86400}
 
@@ -103,9 +103,9 @@ class Metrics:
                 counters[r['name']] = counters.get(r['name'], 0)+r['count']
             latency = {}
             for category in CATEGORIES:
-                relevant = [r for r in rows if r['category'] == category and r['name'] == 'prepare_success']
+                relevant = [r for r in rows if (r['category'] == category or (category == 'all' and r['category'] in ('cold','cached','joined','warmed','recovered'))) and r['name'] == ('job_timing' if category in ('queue','extraction') else 'prepare_success')]
                 count = sum(r['count'] for r in relevant)
-                values = [s['duration'] for s in samples if s['category'] == category and s['at'] >= cutoff]
+                values = [s['duration'] for s in samples if (s['category'] == category or (category == 'all' and s['category'] in ('cold','cached','joined','warmed','recovered'))) and s['at'] >= cutoff]
                 latency[category] = self._latency(values, count)
                 latency[category]['average_seconds'] = sum(r['duration'] for r in relevant)/count if count else None
             selected = [r for r in cohorts if r['completed_at'] is not None and r['completed_at'] >= cutoff]
@@ -131,3 +131,89 @@ class Metrics:
                     'usefulness': rate(consumed, len(selected)), 'maturing': any(now-r['completed_at'] < 7200 for r in selected)}}
         return {'source': 'jukes', 'started_at': started, 'sample_limit': self.sample_limit,
                 'lifetime': totals, 'windows': windows}
+
+    def begin_preparation(self, started_at, *, requested=True):
+        import uuid
+        observation = uuid.uuid4().hex
+        with self.store.transaction() as c:
+            if c.execute('SELECT COUNT(*) FROM jukes_metrics_pending').fetchone()[0] >= 10000:
+                self.record('latency_dropped', connection=c)
+                return None
+            c.execute('INSERT INTO jukes_metrics_pending(id,started_at,category) VALUES (?,?,?)',
+                      (observation, started_at, 'cold'))
+        return observation
+
+    def attach_preparation(self, observation_id, job_id, category):
+        if observation_id is None:
+            return
+        with self.store.transaction() as c:
+            c.execute('UPDATE jukes_metrics_pending SET job_id=?,category=? WHERE id=?', (job_id,category,observation_id))
+            job = c.execute('SELECT status,error_code,recovery_count FROM jukes_jobs WHERE job_id=?', (job_id,)).fetchone()
+            if job and job['status'] in ('ready','failed','evicted'):
+                self.finish_job(job_id, job['status'], job['error_code'], bool(job['recovery_count']), connection=c)
+
+    def finish_job(self, job_id, status, error_code=None, recovered=False, connection=None):
+        if status not in ('ready','failed','evicted'):
+            return
+        with (nullcontext(connection) if connection is not None else self.store.transaction()) as c:
+            rows = c.execute('SELECT * FROM jukes_metrics_pending WHERE job_id=?', (job_id,)).fetchall()
+            for row in rows:
+                if status != 'evicted':
+                    success = status == 'ready'
+                    category = 'recovered' if recovered else row['category']
+                    self.record('prepare_success' if success else 'prepare_failed', category=category,
+                        duration_seconds=max(0,self.clock()-row['started_at']) if success else None,
+                        once=row['id'], connection=c)
+                    if not success:
+                        terminal = error_code in ('video_unavailable','public_audio_required','invalid_media','track_too_large','warmup_too_large')
+                        self.record('terminal_failure' if terminal else 'temporary_failure', once=row['id'], connection=c)
+                c.execute('DELETE FROM jukes_metrics_pending WHERE id=?', (row['id'],))
+
+    def finish_preparation(self, observation_id, *, success, duration_seconds, retryable=False):
+        if observation_id is None:
+            return
+        with self.store.transaction() as c:
+            row = c.execute('SELECT * FROM jukes_metrics_pending WHERE id=?', (observation_id,)).fetchone()
+            if row is None:
+                return
+            self.record('prepare_success' if success else 'prepare_failed', category=row['category'],
+                duration_seconds=duration_seconds if success else None, once=observation_id, connection=c)
+            if not success:
+                self.record('temporary_failure' if retryable else 'terminal_failure', once=observation_id, connection=c)
+            c.execute('DELETE FROM jukes_metrics_pending WHERE id=?', (observation_id,))
+
+    def warmup_started(self, job_id, connection):
+        connection.execute('INSERT OR IGNORE INTO jukes_metrics_warmups(result_id) VALUES (?)', (job_id,))
+        self.record('warmup_started', once=job_id, connection=connection)
+
+    def warmup_completed(self, result_id, completed_at, *, consumed_inflight=False, connection=None):
+        with (nullcontext(connection) if connection is not None else self.store.transaction()) as c:
+            row = c.execute('SELECT * FROM jukes_metrics_warmups WHERE result_id=?', (result_id,)).fetchone()
+            if row is None or row['completed_at'] is not None:
+                return
+            c.execute('UPDATE jukes_metrics_warmups SET completed_at=? WHERE result_id=?', (completed_at,result_id))
+            self.record('warmup_success', once=result_id, connection=c)
+            if row['inflight'] or consumed_inflight:
+                self.consume_warmup(result_id, inflight=True, connection=c)
+
+    def consume_warmup(self, result_id, *, inflight=False, connection=None):
+        with (nullcontext(connection) if connection is not None else self.store.transaction()) as c:
+            row = c.execute('SELECT * FROM jukes_metrics_warmups WHERE result_id=?', (result_id,)).fetchone()
+            if row is None or row['consumed_at'] is not None:
+                return False
+            if row['completed_at'] is None:
+                c.execute('UPDATE jukes_metrics_warmups SET inflight=1 WHERE result_id=?', (result_id,))
+                self.record('warmup_inflight', once=result_id, connection=c)
+                return False
+            c.execute('UPDATE jukes_metrics_warmups SET consumed_at=?,inflight=? WHERE result_id=?',
+                (self.clock(),int(inflight or row['inflight']),result_id))
+            self.record('warmup_consumed', once=result_id, connection=c)
+            return True
+
+    def consume_cached(self, key, completed_at):
+        with self.store.transaction() as c:
+            rows = c.execute('SELECT r.job_id FROM jukes_job_results r JOIN jukes_jobs j USING(job_id) '
+                             'WHERE j.video_id=? AND j.policy=? AND r.completed_at=?',
+                             (key.video_id,key.policy,completed_at)).fetchall()
+            for row in rows:
+                self.consume_warmup(row['job_id'], connection=c)

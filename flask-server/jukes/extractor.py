@@ -196,6 +196,7 @@ class Extractor:
         self._flaky: dict[str, float] = {}
         self._processes: set[Any] = set()
         self._closing = False
+        self.on_retry = None
 
     # -- shared failure state ------------------------------------------
     def cooldown_remaining(self) -> float:
@@ -336,7 +337,7 @@ class Extractor:
         last_code = "extraction_failed"
         suspect = False
         try:
-            for client in client_order():
+            for index, client in enumerate(client_order()):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     last_code = "extraction_timeout"
@@ -353,6 +354,8 @@ class Extractor:
                         last_code = "extraction_timeout"
                         break
                 attempt_timeout = min(remaining, self.fallback_timeout_seconds)
+                if index and self.on_retry is not None:
+                    self.on_retry()
                 try:
                     return self._attempt(key, destination, client, cookie_path, attempt_timeout)
                 except ExtractionError as error:

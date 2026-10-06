@@ -63,6 +63,9 @@ class Jobs:
     ) -> None:
         self.cache = cache
         self.extractor = extractor
+        self.metrics = cache.metrics
+        if hasattr(extractor, "on_retry"):
+            extractor.on_retry = lambda: self.metrics.record("retry_fallback")
         self.worker_count = max(1, worker_count)
         self.max_warmup_workers = (
             max_warmup_workers if max_warmup_workers is not None else max(1, self.worker_count - 1)
@@ -137,6 +140,20 @@ class Jobs:
                      job.recovery_count, self._pid, self._owner_start, job.job_id),
                 )
 
+            if new and job.status == 'queued':
+                connection.execute("INSERT OR IGNORE INTO jukes_metrics_once VALUES (?,?)", ('extraction:'+job.job_id,self._clock()))
+                if not job.requested:
+                    self.metrics.warmup_started(job.job_id, connection)
+            if job.status in ('ready','failed'):
+                actual = connection.execute("SELECT 1 FROM jukes_metrics_once WHERE marker=?", ('extraction:'+job.job_id,)).fetchone()
+                if actual:
+                    self.metrics.record('job_completed' if job.status=='ready' else 'job_failed', once=job.job_id,connection=connection)
+                    if result is not None:
+                        self.metrics.warmup_completed(job.job_id, result['completed_at'], connection=connection)
+                    elif connection.execute('SELECT 1 FROM jukes_metrics_warmups WHERE result_id=?',(job.job_id,)).fetchone():
+                        self.metrics.record('warmup_failed', once=job.job_id, connection=connection)
+                        connection.execute('DELETE FROM jukes_metrics_warmups WHERE result_id=? AND completed_at IS NULL',(job.job_id,))
+                self.metrics.finish_job(job.job_id,job.status,job.error_code,bool(job.recovery_count),connection=connection)
             if result is not None:
                 connection.execute("INSERT OR REPLACE INTO jukes_job_results VALUES (?,?)", (job.job_id, result['completed_at']))
 
@@ -172,6 +189,7 @@ class Jobs:
                 self._persist(job)
                 continue
             job = replace(job, recovery_count=job.recovery_count + 1)
+            self.metrics.record('retry_recovery', once=job.job_id)
             self._jobs[job.job_id] = job
             try:
                 self.cache.reserve(key, requested=job.requested)
@@ -189,14 +207,22 @@ class Jobs:
         with self._cond:
             if self._stopping:
                 raise JobQueueFull("coordinator is shutting down")
+            if not requested:
+                self.metrics.record('warmup_request')
             existing = self._refresh(self._by_key.get(key))
             if existing is not None:
+                if not requested:
+                    self.metrics.record('warmup_cached' if existing.status=='ready' else 'warmup_duplicate')
+                if requested:
+                    self.metrics.consume_warmup(existing.job_id, inflight=existing.status in ACTIVE)
                 return self._attach(existing, requested)
             if len(self._requested_queue) + len(self._warmup_queue) >= self.max_queue_size:
                 raise JobQueueFull("download queue is full")
             now = self._clock()
             entry = self.cache.lookup(key)
             if entry is not None:
+                if not requested:
+                    self.metrics.record('warmup_cached')
                 if requested:
                     self.cache.promote(key)
                 job = Job(uuid.uuid4().hex, key, requested, "ready", now, now)
@@ -336,6 +362,7 @@ class Jobs:
                     return
                 self._running += 1
                 job = self._set(job_id, status="downloading")
+                self.metrics.record('job_timing', category='queue', duration_seconds=max(0,self._clock()-job.created_at),once=job_id)
             try:
                 self._run(job)
             finally:
@@ -358,6 +385,7 @@ class Jobs:
     def _run(self, job: Job) -> None:
         key = job.key
         error_code: str | None = None
+        run_started = self._clock()
         try:
             reservation = self.cache.reserve(key, requested=self._current(job.job_id).requested)
             snapshot = self._snapshot()
@@ -382,6 +410,7 @@ class Jobs:
             if self._stopping and error_code is not None:
                 return  # leave persisted state recoverable
             if error_code is None:
+                self.metrics.record('job_timing',category='extraction',duration_seconds=max(0,self._clock()-run_started),once=job.job_id)
                 self._set(job.job_id, status="ready", error_code=None)
             else:
                 self._set(job.job_id, status="failed", error_code=error_code)
