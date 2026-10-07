@@ -61,3 +61,15 @@ def test_job_failure_after_first_audio_is_a_post_start_failure(monkeypatch):
     result=bench._measure('http://backend','video',True,Consumers())
     assert result['streamed']
     assert result['post_start_failure']
+
+
+def test_cli_accepts_valid_video_id_starting_with_dash(monkeypatch, tmp_path):
+    import sys
+    calls=[]
+    def measure(base, video, progressive):
+        calls.append(video)
+        return {'video_id':video,'state':'ready','cold':True,'first_audio_seconds':1,'complete_seconds':2}
+    monkeypatch.setattr(bench, 'measure', measure)
+    monkeypatch.setattr(sys, 'argv', ['bench','http://origin','--videos=-0YEJbeTXEk','--output',str(tmp_path/'result.json')])
+    bench.main()
+    assert calls == ['-0YEJbeTXEk']

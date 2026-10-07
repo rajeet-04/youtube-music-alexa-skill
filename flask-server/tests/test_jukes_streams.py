@@ -143,3 +143,89 @@ def test_copy_aac_and_transcode_opus(manager):
     assert one.command[one.command.index('-c:a')+1]=='copy'
     assert two.command[two.command.index('-c:a')+1]=='aac'
     assert manager.cache.usage()['requested'] >= 2*manager.budget_bytes
+
+
+def test_committed_source_feeder_does_not_block_download_or_atomic_publication(manager, aac, tmp_path):
+    import threading
+    source = tmp_path/'source.partial'
+    source.write_bytes(aac)
+    key=AudioKey('async-song','p')
+    stream=manager.begin(key,{'duration':12,'acodec':'aac','abr':128},source_path=source)
+    gate=threading.Event()
+    entered=threading.Event()
+    original=stream._write_to_encoder
+    def blocked(data):
+        entered.set()
+        assert gate.wait(5)
+        original(data)
+    stream._write_to_encoder=blocked
+    try:
+        started=time.monotonic()
+        stream.write(aac)
+        assert time.monotonic()-started < .1
+        assert entered.wait(2)
+        started=time.monotonic()
+        stream.finish(True)
+        assert time.monotonic()-started < .1
+        source.rename(tmp_path/'published.aac')
+        manager.complete(key,True)
+    finally:
+        gate.set()
+    stream.feeder.join(5)
+    assert not stream.feeder.is_alive() and stream.finished and not stream.failed
+    playlist=stream.path/'index.m3u8'
+    assert '#EXT-X-ENDLIST' in playlist.read_text()
+    joined=tmp_path/'joined.ts'
+    joined.write_bytes(b''.join((stream.path/name).read_bytes() for name in sorted(stream.segments)))
+    subprocess.run(['ffmpeg','-v','error','-i',str(joined),'-f','null','-'],check=True)
+
+
+def test_committed_source_shutdown_closes_reader_and_reaps_encoder(manager,tmp_path):
+    source=tmp_path/'partial.aac'
+    source.write_bytes(b'')
+    stream=manager.begin(AudioKey('aborted','p'),{'duration':12,'acodec':'aac','abr':128},source_path=source)
+    stream.finish(False)
+    assert not stream.feeder.is_alive()
+    assert stream.source_file.closed
+    assert stream.process.poll() is not None
+    assert stream.finished and stream.failed
+
+
+def test_async_source_pin_prevents_eviction_until_reader_closes(manager,aac,tmp_path):
+    import threading
+    key=AudioKey('pinned-source','p')
+    reservation=manager.cache.reserve(key,requested=True,expected_size=len(aac))
+    reservation.write(aac)
+    stream=manager.begin(key,{'duration':12,'acodec':'aac','abr':128},source_path=reservation.path)
+    gate=threading.Event()
+    original=stream._write_to_encoder
+    stream._write_to_encoder=lambda data: (gate.wait(5),original(data))
+    try:
+        stream.write(aac)
+        stream.finish(True)
+        entry=manager.cache.complete(key,reservation.path,requested=True)
+        row=manager.cache.store.get_audio(key)
+        assert manager.cache._remove_audio(row) is False
+        assert entry.path.exists()
+    finally:
+        gate.set()
+    stream.feeder.join(5)
+    assert manager.cache._remove_audio(row) is True
+
+
+def test_async_validation_failure_and_drain_timeout_unblock_writer(manager,aac,tmp_path):
+    import os,signal,threading
+    source=tmp_path/'source.aac'
+    source.write_bytes(aac)
+    for timeout in (False,True):
+        key=AudioKey('stall'+str(timeout),'p')
+        stream=manager.begin(key,{'duration':12,'acodec':'aac','abr':128},source_path=source)
+        os.kill(stream.process.pid,signal.SIGSTOP)
+        if timeout: stream.drain_timeout_seconds=.1
+        stream.write(aac)
+        if timeout: stream.finish(True)
+        else: manager.complete(key,False)
+        stream.feeder.join(3)
+        assert not stream.feeder.is_alive()
+        assert stream.source_file.closed and stream.process.poll() is not None
+        assert stream.failed and stream.finished

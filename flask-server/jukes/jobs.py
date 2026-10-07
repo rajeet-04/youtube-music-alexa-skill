@@ -436,9 +436,9 @@ class Jobs:
         except Exception:  # noqa: BLE001 - never surface extractor internals
             log.error("download job %s failed: extraction_failed", job.job_id)
             error_code = "extraction_failed"
+        if self.streams: self.streams.complete(key,error_code is None)
         if error_code is not None:
             self.cache.release_reservation(key)
-        if self.streams: self.streams.complete(key,error_code is None)
         with self._cond:
             if self._stopping and error_code is not None:
                 return  # leave persisted state recoverable

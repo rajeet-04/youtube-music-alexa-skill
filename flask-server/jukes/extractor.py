@@ -179,6 +179,10 @@ class Extractor:
         socket_timeout: int = 10,
     ) -> None:
         self._popen = process_factory
+        if process_factory is subprocess.Popen and os.environ.get('JUKES_EXTRACTOR_FORKSERVER') == '1':
+            from .fork_download import ForkDownload, warm
+            warm()
+            self._popen = ForkDownload
         self._public_probe = public_audio_probe or self._probe_public_audio
         self._media_probe = media_probe
         self._clock = clock
@@ -452,7 +456,7 @@ class Extractor:
                     if first_chunk and wanted:
                         try:
                             metadata=json.loads(metadata_path.read_text())
-                            stream=self.streams.begin(key,metadata)
+                            stream=self.streams.begin(key,metadata,source_path=destination.path)
                         except (OSError,ValueError,TypeError):
                             pass  # A missing hint only disables progressive output.
                     first_chunk=False

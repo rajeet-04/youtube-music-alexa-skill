@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -263,13 +264,17 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
 
     metrics = cache.metrics
 
-    def observed_submit(key, started_at):
-        observation = metrics.begin_preparation(started_at)
+    def preparation_path(key):
         entry = cache.lookup(key)
         joined = jobs.has_active(key)
         category = 'warmed' if entry and entry.pool=='warmup' else ('cached' if entry else ('promoted' if joined and jobs.has_speculative(key) else ('joined' if joined else 'cold')))
+        return entry, joined, category
+
+    def observed_submit(key, started_at, admitted=None):
+        observation = metrics.begin_preparation(started_at)
+        entry, joined, category = admitted[1] if admitted else preparation_path(key)
         try:
-            job = submit(key, True)
+            job = jobs.get(admitted[0].job_id) or admitted[0] if admitted else submit(key, True)
         except ApiError:
             metrics.record('admission_rejected')
             with cache.store.transaction() as c:
@@ -402,6 +407,22 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
         ctx = context()
         selector = selector_from_body()
         started_at = time.time()
+        admitted = None
+        streams = getattr(jobs, 'streams', None)
+        # Exact IDs already identify the public extraction key. Admit bounded work
+        # while Music resolves the response metadata; title matching still resolves first.
+        if requested and selector.video_id and os.environ.get('JUKES_PREPARE_OVERLAP') == '1':
+            early_key = AudioKey(selector.video_id, AUDIO_POLICY)
+            if request.args.get('progressive') == '1' and streams:
+                streams.request(early_key)
+            path = preparation_path(early_key)
+            if not path[0] and not path[1]:
+                throttle('requested', settings.requested_per_minute)
+            try:
+                admitted = submit(early_key, True), path
+            except ApiError:
+                metrics.record('admission_rejected')
+                raise
         try:
             track = resolve(selector, ctx)
         except ApiError as error:
@@ -410,14 +431,13 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
                 metrics.finish_preparation(observation,success=False,duration_seconds=time.time()-started_at,retryable=error.retryable)
             raise
         key = AudioKey(track.video_id, AUDIO_POLICY)
-        streams=getattr(jobs,'streams',None)
         if request.args.get('progressive')=='1' and streams: streams.request(key)
-        if not jobs.has_active(key) and cache.lookup(key) is None:  # only genuinely new work
+        if admitted is None and not jobs.has_active(key) and cache.lookup(key) is None:  # only genuinely new work
             if requested:
                 throttle("requested", settings.requested_per_minute)
             else:
                 throttle("warmup", settings.warmup_per_minute)
-        job = observed_submit(key, started_at) if requested else submit(key, False)
+        job = observed_submit(key, started_at, admitted) if requested else submit(key, False)
         body = {**track.as_dict(), **job_view(job), "personalization_status": ctx.personalization_status}
         response = jsonify(body)
         response.status_code = 200 if job.status == "ready" else 202

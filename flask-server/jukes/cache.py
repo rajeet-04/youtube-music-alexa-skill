@@ -215,13 +215,13 @@ class Cache:
         return total
 
     def _eligible_audio(self, excluded: set[tuple[str, str]]) -> list[dict[str, object]]:
-        rows = []
-        for row in self.store.all_audio():
-            key_tuple = (str(row["video_id"]), str(row["policy"]))
-            if key_tuple in excluded or self._is_leased(AudioKey(*key_tuple)):
-                continue
-            rows.append(row)
-        return rows
+        with _COORDINATOR_LOCK:
+            # Admission already holds the writer lock, so leases cannot change
+            # during this scan. Avoid a new SQLite connection for every entry.
+            pinned = {(str(row['video_id']), str(row['policy'])) for row in self.store.all_leases()}
+            unavailable = excluded | pinned
+            return [row for row in self.store.all_audio()
+                    if (str(row['video_id']), str(row['policy'])) not in unavailable]
 
     def _ensure_room(
         self,
@@ -579,12 +579,18 @@ class Cache:
             if required > current_reserved:
                 new_reserved = self._rounded_reservation(required, current_reserved)
             delta = new_reserved - current_reserved
-            self._ensure_room(
-                str(row["pool"]),
-                new_reserved,
-                disk_commitment_bytes=max(0, new_reserved - current_size),
-                exclude_key=key,
-            )
+            # Existing bytes already have a persistent pool/disk reservation.
+            # Scan eviction candidates only for growth or external disk pressure;
+            # repeated scans otherwise serialize every download chunk on SQLite.
+            commitment = max(0, new_reserved - current_size)
+            disk_available = self.disk_free_bytes() - self._pending_disk_bytes(key) - commitment
+            if delta or disk_available < self.config.min_free_disk_bytes:
+                self._ensure_room(
+                    str(row["pool"]),
+                    new_reserved,
+                    disk_commitment_bytes=commitment,
+                    exclude_key=key,
+                )
             if delta:
                 with self.store.transaction() as connection:
                     connection.execute(
@@ -595,6 +601,25 @@ class Cache:
                 output.write(data)
                 output.flush()
             return len(data)
+
+    def pin_reader(self, key: AudioKey) -> Callable[[], None]:
+        """Pin a reserved/ready source across publication until its reader closes."""
+        with _COORDINATOR_LOCK:
+            reservation = self.store.get_reservation(key)
+            if self.store.get_audio(key) is None and (
+                reservation is None or reservation['state'] not in ('reserved', 'publishing')
+            ):
+                return lambda: None
+            lease_id = uuid.uuid4().hex
+            with self.store.transaction() as connection:
+                connection.execute(
+                    'INSERT INTO jukes_leases VALUES (?, ?, ?, ?, ?, ?)',
+                    (lease_id, key.video_id, key.policy, self._pid, self._process_start_token, self.clock()),
+                )
+        def release():
+            with _COORDINATOR_LOCK, self.store.transaction() as connection:
+                connection.execute('DELETE FROM jukes_leases WHERE lease_id = ?', (lease_id,))
+        return release
 
     def open_lease(self, key: AudioKey, *, touch: bool = True) -> tuple[CacheEntry | None, Callable[[], None]]:
         """Pin a ready entry against eviction; returns ``(entry, release)``.

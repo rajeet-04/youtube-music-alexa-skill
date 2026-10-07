@@ -30,6 +30,8 @@ services:
       JUKES_COOKIE_AUTOREFRESH: '0'
       JUKES_PROGRESSIVE: '1'
       JUKES_TIMING_LOG: '1'
+      JUKES_PREPARE_OVERLAP: '1'
+      JUKES_EXTRACTOR_FORKSERVER: '1'
       PUBLIC_BASE_URL: http://127.0.0.1:${CANDIDATE_PORT:-5002}
     volumes:
       - candidate-data:/data

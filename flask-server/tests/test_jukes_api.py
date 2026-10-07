@@ -516,3 +516,44 @@ def test_warmup_direct_audio_consumption_promotes_once(env):
     assert env.client.get('/v1/audio/'+VID).status_code==200
     assert env.cache.lookup(key()).pool=='requested'
     assert env.app.extensions['jukes_metrics'].snapshot()['lifetime']['warmup_consumed']==1
+
+
+def test_exact_id_preparation_overlaps_metadata_with_download(env, monkeypatch):
+    monkeypatch.setenv('JUKES_PREPARE_OVERLAP', '1')
+    started = threading.Event()
+    original_download = env.extractor.download
+    original_metadata = env.yt.get_watch_playlist
+    def download(*args):
+        started.set()
+        return original_download(*args)
+    def metadata(*args, **kwargs):
+        assert started.wait(.5), 'metadata blocked extraction admission'
+        return original_metadata(*args, **kwargs)
+    env.extractor.download = download
+    env.yt.get_watch_playlist = metadata
+    response = post(env, '/v1/audio/prepare', {'video_id': VID})
+    assert response.status_code in (200, 202)
+    assert response.get_json()['title'] == 'Song'
+    wait_ready(env, response.get_json()['job_id'])
+    totals = env.cache.metrics.snapshot()['lifetime']
+    assert totals['cache_miss'] == 1
+    assert totals.get('joined', 0) == 0
+    assert totals['prepare_success'] == 1
+
+
+def test_overlap_respects_requested_admission_before_starting_extraction(env, monkeypatch):
+    monkeypatch.setenv('JUKES_PREPARE_OVERLAP', '1')
+    limiter = env.app.extensions['jukes_limiter']
+    original = limiter.check
+    limiter.check = lambda bucket, *args: 10 if bucket == 'requested' else original(bucket, *args)
+    assert post(env, '/v1/audio/prepare', {'video_id': VID}).status_code == 429
+    assert env.extractor.calls == []
+
+
+def test_overlap_metadata_failure_remains_one_failed_preparation(env, monkeypatch):
+    monkeypatch.setenv('JUKES_PREPARE_OVERLAP', '1')
+    env.yt.fail = True
+    assert post(env, '/v1/audio/prepare', {'video_id': VID}).status_code == 502
+    totals = env.cache.metrics.snapshot()['lifetime']
+    assert totals['prepare_failed'] == 1
+    assert totals.get('prepare_success', 0) == 0

@@ -49,7 +49,7 @@ class Streams:
         with self.lock:
             return time.monotonic()-self.requested.get(key,-1000)<300
 
-    def begin(self, key, metadata):
+    def begin(self, key, metadata, *, source_path=None):
         duration = metadata.get('duration')
         if not isinstance(duration,(int,float)) or not math.isfinite(duration) or not 0 < duration <= 1800:
             return None  # Full-file compatibility when progressive eligibility is unknown.
@@ -61,7 +61,7 @@ class Streams:
         except CacheCapacityError:
             return None  # Streaming capacity must not prevent completed-file playback.
         try:
-            stream = Stream(self,key,stream_id,reservation_key,metadata)
+            stream = Stream(self,key,stream_id,reservation_key,metadata,source_path=source_path)
         except (OSError, subprocess.SubprocessError):
             self.cache.release_reservation(reservation_key)
             shutil.rmtree(self.root/stream_id,ignore_errors=True)
@@ -93,6 +93,8 @@ class Streams:
                 stream.failed = bool(not success or stream.failed)
                 stream.touched=time.monotonic()
                 stream.refresh()
+        if stream and stream.failed:
+            stream.finish(False)  # Kill/unblock outside the manager lock.
 
     def lease(self,stream_id,filename):
         if filename != 'index.m3u8' and not _SEGMENT.fullmatch(filename):
@@ -132,7 +134,7 @@ class Streams:
 
 
 class Stream:
-    def __init__(self,manager,key,stream_id,reservation_key,metadata):
+    def __init__(self,manager,key,stream_id,reservation_key,metadata,*,source_path=None):
         self.manager,self.key,self.stream_id,self.reservation_key=manager,key,stream_id,reservation_key
         self.path=manager.root/stream_id
         self.path.mkdir(mode=0o700)
@@ -142,6 +144,14 @@ class Stream:
         self.segments=set()
         self.ready_seconds=None
         self.write_lock=threading.Lock()
+        self.source_condition=threading.Condition()
+        self.source_file=None
+        self.feeder=None
+        self.available_bytes=0
+        self.source_eof=False
+        self.drain_timeout_seconds=15
+        self.encoder_timer=None
+        self.source_release=lambda: None
         codec=str(metadata.get('acodec',''))
         abr=metadata.get('abr')
         copy=codec in ('aac','mp4a.40.2') and isinstance(abr,(int,float)) and 0 < abr <= 256
@@ -156,6 +166,20 @@ class Stream:
                                       stderr=subprocess.DEVNULL,bufsize=0)
         self.monitor=threading.Thread(target=self._monitor,daemon=True)
         self.monitor.start()
+        if source_path is not None:
+            try:
+                self.source_release=manager.cache.pin_reader(key)
+                # Keep this descriptor open across the cache's atomic rename.
+                self.source_file=Path(source_path).open('rb',buffering=0)
+            except OSError:
+                self.source_release()
+                self.finish(False)
+                raise
+            self.encoder_timer=threading.Timer(120,self._abort_encoder)
+            self.encoder_timer.daemon=True
+            self.encoder_timer.start()
+            self.feeder=threading.Thread(target=self._feed_committed,daemon=True)
+            self.feeder.start()
 
     def _monitor(self):
         while not self.finished:
@@ -208,6 +232,46 @@ class Stream:
 
     def write(self,data):
         if self.failed or self.finished: return
+        if self.source_file is not None:
+            with self.source_condition:
+                # Bytes are already flushed to the reserved cache file. Signal a
+                # committed range instead of buffering audio or blocking on FFmpeg.
+                self.available_bytes+=len(data)
+                self.source_condition.notify_all()
+            return
+        self._write_to_encoder(data)
+
+    def _feed_committed(self):
+        position=0
+        success=False
+        try:
+            while not self.failed:
+                with self.source_condition:
+                    self.source_condition.wait_for(
+                        lambda: self.failed or self.source_eof or self.available_bytes>position,
+                        timeout=.1)
+                    if self.failed: break
+                    size=min(256*1024,self.available_bytes-position)
+                    if not size:
+                        if self.source_eof:
+                            success=True
+                            break
+                        continue
+                data=self.source_file.read(size)
+                if len(data)!=size:
+                    self.failed=True
+                    break
+                self._write_to_encoder(data)
+                position+=size
+        except OSError:
+            self.failed=True
+        finally:
+            self.source_file.close()
+            self.source_release()
+            self._finish_encoder(success and not self.failed)
+
+    def _write_to_encoder(self,data):
+        if self.failed or self.finished: return
         with self.write_lock:
             try:
                 view=memoryview(data)
@@ -218,6 +282,28 @@ class Stream:
             except (BrokenPipeError,OSError,ValueError): self.failed=True
 
     def finish(self,success):
+        if self.finished: return
+        if self.feeder is not None:
+            with self.source_condition:
+                was_eof=self.source_eof
+                self.source_eof=True
+                if not success: self.failed=True
+                if success and not was_eof:
+                    self.encoder_timer.cancel()
+                    self.encoder_timer=threading.Timer(self.drain_timeout_seconds,self._abort_encoder)
+                    self.encoder_timer.daemon=True
+                    self.encoder_timer.start()
+                self.source_condition.notify_all()
+            if not success:
+                self.process.kill()  # Unblock a feeder stalled in its stdin write.
+                self.feeder.join(7)
+            return
+        self._finish_encoder(success)
+
+    def _abort_encoder(self):
+        self.finish(False)
+
+    def _finish_encoder(self,success):
         with self.write_lock:
             if self.finished: return
             if not success:
@@ -233,4 +319,5 @@ class Stream:
                 self.refresh()
                 self.finished=True
                 self.touched=time.monotonic()
+                if self.encoder_timer: self.encoder_timer.cancel()
         self.monitor.join(timeout=1)
