@@ -105,6 +105,30 @@ def wait_ready(env, job_id):
     return env.jobs.wait(job_id, 3)
 
 
+def test_progressive_poll_returns_before_completed_and_old_poll_waits(env):
+    env.extractor.gate=threading.Event()
+    class Streams:
+        def request(self,key): pass
+        def view(self,key): return {'stream_id':'a'*32,'video_id':key.video_id,'streamable':True,'stream_ready_seconds':.2}
+        def complete(self,key,success): pass
+        def shutdown(self): pass
+    env.jobs.streams=Streams()
+    prepared=env.client.post('/v1/audio/prepare?progressive=1',json={'video_id':VID}).get_json()
+    assert prepared['stream_url'].endswith('/index.m3u8?video_id='+VID)
+    assert 'audio_url' not in prepared
+    started=time.monotonic()
+    view=env.client.get('/v1/jobs/'+prepared['job_id']+'?wait=1&progressive=1').get_json()
+    assert time.monotonic()-started < .3
+    assert view['streamable'] is True
+    old=env.client.get('/v1/jobs/'+prepared['job_id']).get_json()
+    assert 'stream_url' not in old and 'streamable' not in old
+
+
+def test_unknown_stream_and_traversal_are_not_served(env):
+    assert env.client.get('/v1/streams/'+'a'*32+'/index.m3u8').status_code==404
+    assert env.client.head('/v1/streams/'+'a'*32+'/index.m3u8').status_code==404
+
+
 def post(env, path, body, **kw):
     return env.client.post(path, data=json.dumps(body), content_type="application/json", **kw)
 

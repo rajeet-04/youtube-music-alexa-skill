@@ -64,6 +64,38 @@ chosen track; the backend picks the best match but the app owns the final call.
 ### Polling
 
 `GET /v1/jobs/{job_id}` → `{job_id, video_id, status, pool, audio_url?, error?}`.
+
+### Optional progressive playback
+
+When the backend is started with `JUKES_PROGRESSIVE=1`, playback clients can use
+`POST /v1/audio/prepare?progressive=1` and
+`GET /v1/jobs/{job_id}?wait=10&progressive=1`. The JSON body is unchanged.
+If early AAC segments are available, these responses add `streamable: true`,
+`stream_url`, `stream_id`, `video_id` and `stream_ready_seconds`. The job remains
+`downloading` until the complete source is downloaded and validated. A progressive
+long poll wakes when segments are available; a normal long poll still waits for
+completion. `stream_ready_seconds` measures segment generation from its start,
+not total preparation or actual device playback latency.
+
+The `.m3u8` URL serves an AAC EVENT playlist; relative `.ts` URLs identify immutable
+audio-only MPEG-TS segments. Playlists use `no-store` and acquire a reader lease.
+Segments support normal GET/HEAD and conditional file requests. Only completed,
+atomically published segments can be fetched. Playlist/segment HEAD does not start
+extraction. A failed generation returns 404; it is never restarted under the same
+stream ID. Successful streams retain their full timeline and receive ENDLIST only
+after full-source validation. Inactive completed streams expire after 30 minutes;
+active response leases and a 30-minute grace between requests pin their files.
+
+Use `stream_url` for immediate playback as soon as it is present, even while the
+job is downloading. Continue to use `audio_url` once `status: ready` for completed
+file downloads and offline persistence. Never pass a playlist to a segmented
+file downloader. Clients without progressive support omit the query parameter;
+they retain completed-file behavior and do not start an HLS encoder.
+
+Tracks with unknown duration, duration over 30 minutes, unavailable streaming
+capacity, or an unsuitable input container fall back to completed-file delivery.
+The input URL is always `https://music.youtube.com/watch?v=<id>`. Format selectors
+exclude video in every fallback, and media containing a video stream is rejected.
 Public: it never contains title/artist or user data. Add `?wait=<seconds>` to
 long-poll: the server answers as soon as the job is ready or failed, holding the
 request at most `JUKES_MAX_JOB_WAIT_SECONDS` (default 10). Without `wait` (or on an

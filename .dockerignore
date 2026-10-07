@@ -1,0 +1,10 @@
+.git
+.superpowers
+.venv
+**/__pycache__
+.env
+**/*cookies*.txt
+**/headers_auth.json
+**/local.properties
+node_modules
+*.log

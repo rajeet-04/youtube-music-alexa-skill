@@ -1,0 +1,195 @@
+{
+  "summary": {
+    "requests": 20,
+    "cold_successes": 20,
+    "cold_failures": 0,
+    "cache_hits_excluded": 0,
+    "post_start_failures": 0,
+    "max_buffer_deficit_seconds": 0.0,
+    "first_audio_p95_seconds": 4.981288676004624,
+    "completion_p95_seconds": 4.9454575599811506,
+    "first_audio_max_seconds": 5.080366145994049
+  },
+  "rows": [
+    {
+      "video_id": "bench000003",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 4.69183041100041,
+      "complete_seconds": 4.65036832599435,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "bench000004",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 4.906160974991508,
+      "complete_seconds": 4.88825189700583,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "bench000001",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 4.981288676004624,
+      "complete_seconds": 4.9454575599811506,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "bench000002",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 5.080366145994049,
+      "complete_seconds": 4.95339802998933,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "bench000005",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 4.602213664998999,
+      "complete_seconds": 4.585013274016092,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "bench000006",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 4.729635385010624,
+      "complete_seconds": 4.681050998013234,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "bench000007",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 4.835191673977533,
+      "complete_seconds": 4.707931154989637,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "bench000008",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 4.814282089995686,
+      "complete_seconds": 4.769994500995381,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "bench000009",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 4.560626581980614,
+      "complete_seconds": 4.532892297982471,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "bench000010",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 4.606005021021701,
+      "complete_seconds": 4.55804415899911,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "bench000011",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 4.587684500002069,
+      "complete_seconds": 4.5532238770101685,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "bench000012",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 4.667574562015943,
+      "complete_seconds": 4.6408664070186205,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "bench000013",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 4.43067384097958,
+      "complete_seconds": 4.412763243977679,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "bench000014",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 4.560895307018654,
+      "complete_seconds": 4.542174141999567,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "bench000015",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 4.5546470520203,
+      "complete_seconds": 4.535816046001855,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "bench000016",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 4.560501183004817,
+      "complete_seconds": 4.542146062012762,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "bench000017",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 4.415125947009074,
+      "complete_seconds": 4.396618304017466,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "bench000018",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 4.486738656007219,
+      "complete_seconds": 4.464824384020176,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "bench000019",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 4.440408249007305,
+      "complete_seconds": 4.418358015012927,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "bench000020",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 4.404754015005892,
+      "complete_seconds": 4.38854995300062,
+      "streamed": false,
+      "error": null
+    }
+  ]
+}

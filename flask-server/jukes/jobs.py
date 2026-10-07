@@ -68,7 +68,7 @@ class Jobs:
             extractor.on_retry = lambda: self.metrics.record("retry_fallback")
         self.worker_count = max(1, worker_count)
         self.max_warmup_workers = (
-            max_warmup_workers if max_warmup_workers is not None else max(1, self.worker_count - 1)
+            max_warmup_workers if max_warmup_workers is not None else 1
         )
         self.max_queue_size = max_queue_size
         self._credential_provider = credential_provider
@@ -88,6 +88,7 @@ class Jobs:
         self._queued_mono = {}
         self._pid = cache._pid
         self._owner_start = cache._process_start_token
+        self.streams = getattr(extractor,'streams',None)
         if autostart:
             self.start()
 
@@ -121,6 +122,7 @@ class Jobs:
                 terminate()
             for thread in self._threads:
                 thread.join(2.0)
+        if self.streams: self.streams.shutdown()
 
     # -- persistence ---------------------------------------------------
     def _persist(self, job: Job, *, new: bool = False) -> None:
@@ -330,17 +332,19 @@ class Jobs:
             self._refresh(job_id)
             return self._jobs.get(job_id)
 
-    def wait(self, job_id: str, timeout: float) -> Job | None:
+    def wait(self, job_id: str, timeout: float, *, until_streamable: bool = False) -> Job | None:
         deadline = time.monotonic() + max(0.0, timeout)
         with self._cond:
             while True:
                 job = self._jobs.get(job_id)
                 if job is None or job.status not in ACTIVE:
                     return self.get(job_id)
+                if until_streamable and self.streams and self.streams.view(job.key):
+                    return job
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return job
-                self._cond.wait(remaining)
+                self._cond.wait(min(remaining,.1) if until_streamable else remaining)
 
     def prune(self, now: float | None = None) -> int:
         """Forget terminal jobs older than 24 hours (audio is unaffected)."""
@@ -434,6 +438,7 @@ class Jobs:
             error_code = "extraction_failed"
         if error_code is not None:
             self.cache.release_reservation(key)
+        if self.streams: self.streams.complete(key,error_code is None)
         with self._cond:
             if self._stopping and error_code is not None:
                 return  # leave persisted state recoverable

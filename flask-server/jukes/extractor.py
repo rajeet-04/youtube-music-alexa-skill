@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 # (comma-separated) without a rebuild.
 CLIENT_ORDER = ("tv_simply", "web_embedded", "default", "android_vr", "web", "tv")
 COOKIELESS_CLIENTS = {"tv_simply", "web_embedded", "android_vr", "ios"}
-FORMAT_SELECTOR = "140/bestaudio[ext=m4a]/bestaudio/best"
+FORMAT_SELECTOR = "140[vcodec=none]/bestaudio[ext=m4a][vcodec=none]/bestaudio[vcodec=none]"
 CHUNK_BYTES = 256 * 1024
 STDERR_LIMIT = 16 * 1024
 
@@ -197,6 +197,7 @@ class Extractor:
         self._processes: set[Any] = set()
         self._closing = False
         self.on_retry = None
+        self.streams = None
 
     # -- shared failure state ------------------------------------------
     def cooldown_remaining(self) -> float:
@@ -256,7 +257,7 @@ class Extractor:
         base_url = os.environ.get("YTDLP_BGUTIL_BASE_URL", "http://bgutil-provider:4416")
         if base_url:
             command += ["--extractor-args", f"youtubepot-bgutilhttp:base_url={base_url}"]
-        command += ["-o", "-", "--", key.video_id]
+        command += ["-o", "-", "--", f"https://music.youtube.com/watch?v={key.video_id}"]
         return command
 
     # -- public-scope probe --------------------------------------------
@@ -268,7 +269,7 @@ class Extractor:
         base_url = os.environ.get("YTDLP_BGUTIL_BASE_URL", "http://bgutil-provider:4416")
         if base_url:
             command += ["--extractor-args", f"youtubepot-bgutilhttp:base_url={base_url}"]
-        command += ["--", key.video_id]
+        command += ["--", f"https://music.youtube.com/watch?v={key.video_id}"]
         process = self._spawn(command)
         try:
             raw = process.stdout.read(2_000_000)
@@ -364,6 +365,8 @@ class Extractor:
                     if error.code == "rate_limited":
                         self._start_cooldown()
                         raise
+                    if self.streams and self.streams.published(key):
+                        raise  # Never restart a generation after its bytes were published.
                     if error.code in {"video_unavailable", "invalid_media"}:
                         if error.code == "video_unavailable":
                             self._remember(self._dead, key.video_id, self.dead_ttl_seconds)
@@ -395,9 +398,21 @@ class Extractor:
         return path
 
     def _attempt(self, key, destination, client, cookie_path, timeout) -> DownloadResult:
+        attempt_started=time.monotonic()
+        first_byte_seconds=None
+        cache_write_seconds=stream_write_seconds=0.0
         with open(destination.path, "r+b") as partial:  # discard bytes from a failed client
             partial.truncate(0)
-        process = self._spawn(self._command(key, client, cookie_path))
+        command = self._command(key, client, cookie_path)
+        metadata_path = Path(str(destination.path)+'.stream.json')
+        if self.streams:
+            metadata_path.unlink(missing_ok=True)
+            command[1:1] = ['--print-to-file',
+                'before_dl:{"acodec":%(acodec)j,"abr":%(abr)j,"duration":%(duration)j}',str(metadata_path)]
+        process = self._spawn(command)
+        stream = None
+        first_chunk = True
+        source_ok = False
         stderr_chunks: list[bytes] = []
 
         def drain_stderr() -> None:
@@ -416,6 +431,8 @@ class Extractor:
         def on_timeout() -> None:
             timed_out.set()
             self._kill(process)
+            if stream and stream.process.poll() is None:
+                stream.process.kill()  # Also unblock a stalled progressive stdin write.
 
         watchdog = threading.Timer(timeout, on_timeout)
         watchdog.daemon = True
@@ -423,15 +440,32 @@ class Extractor:
         try:
             try:
                 while True:
-                    chunk = process.stdout.read(CHUNK_BYTES)
+                    # Get startup audio promptly, then amortize persistent capacity checks.
+                    wanted=self.streams and self.streams.wanted(key)
+                    chunk = process.stdout.read(64 * 1024 if first_chunk and wanted else CHUNK_BYTES)
                     if not chunk:
                         break
+                    if first_byte_seconds is None: first_byte_seconds=time.monotonic()-attempt_started
+                    write_started=time.monotonic()
                     destination.write(chunk)
+                    cache_write_seconds+=time.monotonic()-write_started
+                    if first_chunk and wanted:
+                        try:
+                            metadata=json.loads(metadata_path.read_text())
+                            stream=self.streams.begin(key,metadata)
+                        except (OSError,ValueError,TypeError):
+                            pass  # A missing hint only disables progressive output.
+                    first_chunk=False
+                    if stream:
+                        write_started=time.monotonic()
+                        stream.write(chunk)
+                        stream_write_seconds+=time.monotonic()-write_started
             except CacheCapacityError:
                 self._kill(process)
                 raise
             try:
                 code = process.wait(timeout=max(0.001, timeout))
+                source_ok = code == 0 and not timed_out.is_set()
             except subprocess.TimeoutExpired:
                 timed_out.set()
                 self._kill(process)
@@ -439,6 +473,12 @@ class Extractor:
         finally:
             watchdog.cancel()
             self._forget(process)
+            metadata_path.unlink(missing_ok=True)
+            if stream: stream.finish(source_ok)
+            if os.environ.get('JUKES_TIMING_LOG')=='1':
+                log.warning('audio timing video=%s client=%s first_byte=%.3f total=%.3f cache_write=%.3f stream_write=%.3f stream_ready=%s',
+                    key.video_id,client,first_byte_seconds or 0,time.monotonic()-attempt_started,
+                    cache_write_seconds,stream_write_seconds,stream.ready_seconds if stream else None)
         reader.join(timeout=2)
         if timed_out.is_set():
             raise ExtractionError("extraction_timeout")
@@ -458,7 +498,7 @@ class Extractor:
         probe = self._media_probe(path) or {}
         container = _container(str(probe.get("format_name", "")))
         audio = [s for s in probe.get("streams") or [] if s.get("codec_type") == "audio"]
-        if container is None or not audio:
+        if container is None or not audio or any(s.get("codec_type") == "video" for s in probe.get("streams") or []):
             raise ExtractionError("invalid_media")
         try:
             duration = float(probe.get("duration"))

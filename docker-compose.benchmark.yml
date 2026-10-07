@@ -1,0 +1,89 @@
+services:
+  control:
+    image: jukes-admin-metrics:be9ca17
+    container_name: jukes-benchmark-${BENCH_RUN:-pilot}-control
+    network_mode: container:gluetun
+    environment:
+      JUKES_DB_PATH: /data/jukes.sqlite3
+      JUKES_AUDIO_DIR: /cache
+      YTDLP_BGUTIL_BASE_URL: http://127.0.0.1:4416
+      YTDLP_JS_RUNTIME: deno
+      JUKES_COOKIE_AUTOREFRESH: '0'
+      PUBLIC_BASE_URL: http://127.0.0.1:${CONTROL_PORT:-5001}
+    volumes:
+      - control-data:/data
+      - control-cache:/cache
+    command: [waitress-serve, '--host=0.0.0.0', '--port=${CONTROL_PORT:-5001}', '--threads=16', 'server:app']
+  candidate:
+    build:
+      context: .
+      dockerfile: Dockerfile.benchmark
+      target: candidate
+    image: jukes-progressive:candidate
+    container_name: jukes-benchmark-${BENCH_RUN:-pilot}-candidate
+    network_mode: container:gluetun
+    environment:
+      JUKES_DB_PATH: /data/jukes.sqlite3
+      JUKES_AUDIO_DIR: /cache
+      YTDLP_BGUTIL_BASE_URL: http://127.0.0.1:4416
+      YTDLP_JS_RUNTIME: deno
+      JUKES_COOKIE_AUTOREFRESH: '0'
+      JUKES_PROGRESSIVE: '1'
+      JUKES_TIMING_LOG: '1'
+      PUBLIC_BASE_URL: http://127.0.0.1:${CANDIDATE_PORT:-5002}
+    volumes:
+      - candidate-data:/data
+      - candidate-cache:/cache
+    command: [waitress-serve, '--host=0.0.0.0', '--port=${CANDIDATE_PORT:-5002}', '--threads=16', 'server:app']
+  tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.benchmark
+      target: tests
+    image: jukes-progressive:tests
+    profiles: [tests]
+  fixture-control:
+    build:
+      context: .
+      dockerfile: Dockerfile.benchmark
+      target: fixture_control
+    image: jukes-progressive:fixture-control
+    container_name: jukes-fixture-control
+    network_mode: container:gluetun
+    profiles: [fixtures]
+    environment:
+      JUKES_DB_PATH: /data/jukes.sqlite3
+      JUKES_AUDIO_DIR: /cache
+      JUKES_COOKIE_AUTOREFRESH: '0'
+      BENCH_FIXTURE_PORT: '5005'
+    volumes:
+      - fixture-control-data:/data
+      - fixture-control-cache:/cache
+  fixture-candidate:
+    build:
+      context: .
+      dockerfile: Dockerfile.benchmark
+      target: fixture_candidate
+    image: jukes-progressive:fixture-candidate
+    container_name: jukes-fixture-candidate
+    network_mode: container:gluetun
+    profiles: [fixtures]
+    environment:
+      JUKES_DB_PATH: /data/jukes.sqlite3
+      JUKES_AUDIO_DIR: /cache
+      JUKES_PROGRESSIVE: '1'
+      JUKES_TIMING_LOG: '1'
+      JUKES_COOKIE_AUTOREFRESH: '0'
+      BENCH_FIXTURE_PORT: '5006'
+    volumes:
+      - fixture-candidate-data:/data
+      - fixture-candidate-cache:/cache
+volumes:
+  control-data:
+  control-cache:
+  candidate-data:
+  candidate-cache:
+  fixture-control-data:
+  fixture-control-cache:
+  fixture-candidate-data:
+  fixture-candidate-cache:

@@ -101,7 +101,8 @@ def test_ytdlp_client_order_and_current_compatible_format_policy(monkeypatch, ca
             if "--extractor-args" in command else "default" for command in commands] == [
         "tv_simply", "web_embedded", "default", "android_vr"
     ]
-    assert "140/bestaudio[ext=m4a]/bestaudio/best" in commands[0]
+    assert "140[vcodec=none]/bestaudio[ext=m4a][vcodec=none]/bestaudio[vcodec=none]" in commands[0]
+    assert commands[0][-1] == "https://music.youtube.com/watch?v=fallback-order"
     assert "--remote-components" in commands[0]
     assert "ejs:github" in commands[0]
     assert "--js-runtimes" in commands[0]
@@ -114,6 +115,71 @@ def test_ytdlp_client_order_and_current_compatible_format_policy(monkeypatch, ca
     assert result.media_format == "mp4"
     assert result.duration_seconds == 12.5
     assert reservation.path.read_bytes() == b"valid-audio"
+
+
+def test_validation_rejects_combined_video_and_audio(cache):
+    extractor = Extractor(media_probe=lambda path: {
+        "format_name": "mp4", "duration": "10", "streams": [
+            {"codec_type": "audio", "codec_name": "aac"},
+            {"codec_type": "video", "codec_name": "h264"},
+        ]})
+    reservation = cache.reserve(AudioKey("combined", "p"), requested=True)
+    reservation.write(b"combined-media")
+    with pytest.raises(ExtractionError, match="validation"):
+        extractor._validate(reservation, "tv_simply")
+
+
+def test_public_probe_uses_music_url():
+    commands = []
+    def spawn(args, **kwargs):
+        commands.append(args)
+        return FakeProcess(args, payload=b'{"availability":"public"}')
+    extractor = Extractor(process_factory=spawn)
+    assert extractor._probe_public_audio(AudioKey("public-song", "p"), 5)
+    assert commands[0][-1] == "https://music.youtube.com/watch?v=public-song"
+
+
+def test_progressive_download_keeps_capacity_checks_batched(tmp_path):
+    payload=b'a'*1_048_576
+    class Destination:
+        path=tmp_path/'source.partial'
+        writes=0
+        def write(self,data):
+            self.writes+=1
+            with self.path.open('ab') as output: output.write(data)
+    destination=Destination(); destination.path.touch()
+    extractor=Extractor(process_factory=lambda args,**kw: FakeProcess(args,payload=payload),
+        media_probe=lambda path: {'format_name':'mp4','streams':[{'codec_type':'audio','codec_name':'aac'}]})
+    extractor._attempt(AudioKey('song','p'),destination,'tv_simply',None,5)
+    assert destination.path.read_bytes()==payload
+    assert destination.writes<=6  # Avoid 32 capacity/database scans per MiB.
+
+
+def test_old_clients_do_not_start_a_progressive_encoder(cache):
+    class Streams:
+        def wanted(self,key): return False
+        def begin(self,*args): raise AssertionError('old client started an encoder')
+    def spawn(args,**kwargs):
+        if '--print-to-file' in args:
+            Path(args[args.index('--print-to-file')+2]).write_text('{"duration":12,"acodec":"aac","abr":128}')
+        return FakeProcess(args,payload=b'audio')
+    extractor=Extractor(process_factory=spawn,media_probe=lambda path:{
+        'format_name':'mp4','streams':[{'codec_type':'audio','codec_name':'aac'}]})
+    extractor.streams=Streams()
+    reservation=cache.reserve(AudioKey('old-client','p'),requested=True)
+    extractor._attempt(reservation.key,reservation,'tv_simply',None,5)
+
+
+def test_rate_limit_after_publication_still_applies_cooldown(cache):
+    class Streams:
+        def published(self,key): return True
+    extractor=Extractor(clock=lambda:100)
+    extractor.streams=Streams()
+    def rate_limit(*args): raise ExtractionError('rate_limited')
+    extractor._attempt=rate_limit
+    reservation=cache.reserve(AudioKey('limited','p'),requested=True)
+    with pytest.raises(ExtractionError): extractor.download(reservation.key,reservation,None)
+    assert extractor.cooldown_remaining()>0
 
 
 def test_cookie_snapshot_path_is_unique_private_and_removed_after_download(monkeypatch, cache: Cache):

@@ -1,0 +1,355 @@
+{
+  "summary": {
+    "requests": 20,
+    "cold_successes": 20,
+    "cold_failures": 0,
+    "cache_hits_excluded": 0,
+    "post_start_failures": 0,
+    "max_buffer_deficit_seconds": 0.0,
+    "first_audio_p95_seconds": 1.9542601599823684,
+    "completion_p95_seconds": 4.997578826994868,
+    "first_audio_max_seconds": 2.0092332049971446
+  },
+  "rows": [
+    {
+      "video_id": "bench000002",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 1.9542601599823684,
+      "complete_seconds": 4.585829001996899,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 46,
+        "bytes": 1592360,
+        "audio_seconds": 90.02375799999996,
+        "max_playlist_gap_seconds": 0.6233535270148423,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "bench000003",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 1.9442716719931923,
+      "complete_seconds": 5.030105792975519,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 46,
+        "bytes": 1592360,
+        "audio_seconds": 90.02375799999996,
+        "max_playlist_gap_seconds": 0.6471212559845299,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "bench000001",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 1.9472152979869861,
+      "complete_seconds": 4.9578995580086485,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 46,
+        "bytes": 1592360,
+        "audio_seconds": 90.02375799999996,
+        "max_playlist_gap_seconds": 0.5400594730162993,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "bench000004",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 1.9107283370103687,
+      "complete_seconds": 4.997578826994868,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 46,
+        "bytes": 1592360,
+        "audio_seconds": 90.02375799999996,
+        "max_playlist_gap_seconds": 0.6313584369781893,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "bench000005",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 2.0092332049971446,
+      "complete_seconds": 4.638812030985719,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 46,
+        "bytes": 1592360,
+        "audio_seconds": 90.02375799999996,
+        "max_playlist_gap_seconds": 0.6170828720205463,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "bench000006",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 1.8244134989799932,
+      "complete_seconds": 4.855844381992938,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 46,
+        "bytes": 1592360,
+        "audio_seconds": 90.02375799999996,
+        "max_playlist_gap_seconds": 0.6252682640042622,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "bench000008",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 1.691509647993371,
+      "complete_seconds": 4.697531307989266,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 46,
+        "bytes": 1592360,
+        "audio_seconds": 90.02375799999996,
+        "max_playlist_gap_seconds": 0.6251229430199601,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "bench000007",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 1.7004837270069402,
+      "complete_seconds": 4.756355946010444,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 46,
+        "bytes": 1592360,
+        "audio_seconds": 90.02375799999996,
+        "max_playlist_gap_seconds": 0.6271695609902963,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "bench000009",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 1.502942190010799,
+      "complete_seconds": 4.490186804992845,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 46,
+        "bytes": 1592360,
+        "audio_seconds": 90.02375799999996,
+        "max_playlist_gap_seconds": 0.6172431930026505,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "bench000010",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 1.7660134250181727,
+      "complete_seconds": 4.53809554700274,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 46,
+        "bytes": 1592360,
+        "audio_seconds": 90.02375799999996,
+        "max_playlist_gap_seconds": 0.7212840689753648,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "bench000012",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 1.5883557010092773,
+      "complete_seconds": 4.661739995004609,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 46,
+        "bytes": 1592360,
+        "audio_seconds": 90.02375799999996,
+        "max_playlist_gap_seconds": 0.7161475439788774,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "bench000011",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 1.6496762409806252,
+      "complete_seconds": 4.618064850976225,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 46,
+        "bytes": 1592360,
+        "audio_seconds": 90.02375799999996,
+        "max_playlist_gap_seconds": 0.6191140500013717,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "bench000013",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 1.5367383279954083,
+      "complete_seconds": 4.49707014800515,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 46,
+        "bytes": 1592360,
+        "audio_seconds": 90.02375799999996,
+        "max_playlist_gap_seconds": 0.6241113340074662,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "bench000014",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 1.5604388559877407,
+      "complete_seconds": 4.5872393820027355,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 46,
+        "bytes": 1592360,
+        "audio_seconds": 90.02375799999996,
+        "max_playlist_gap_seconds": 0.6227038019860629,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "bench000015",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 1.7078163140104152,
+      "complete_seconds": 4.589002238004468,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 46,
+        "bytes": 1592360,
+        "audio_seconds": 90.02375799999996,
+        "max_playlist_gap_seconds": 0.7198984980059322,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "bench000016",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 1.7023327850038186,
+      "complete_seconds": 4.6640627779997885,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 46,
+        "bytes": 1592360,
+        "audio_seconds": 90.02375799999996,
+        "max_playlist_gap_seconds": 0.6307814730098471,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "bench000017",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 1.6130478799750563,
+      "complete_seconds": 4.582937745988602,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 46,
+        "bytes": 1592360,
+        "audio_seconds": 90.02375799999996,
+        "max_playlist_gap_seconds": 0.6788412159949075,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "bench000018",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 1.5754945089865942,
+      "complete_seconds": 4.606144110002788,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 46,
+        "bytes": 1592360,
+        "audio_seconds": 90.02375799999996,
+        "max_playlist_gap_seconds": 0.6253914660192095,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "bench000019",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 1.5489816759945825,
+      "complete_seconds": 4.525571441015927,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 46,
+        "bytes": 1592360,
+        "audio_seconds": 90.02375799999996,
+        "max_playlist_gap_seconds": 0.6238483320048545,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "bench000020",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 1.511930869979551,
+      "complete_seconds": 4.647339512972394,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 46,
+        "bytes": 1592360,
+        "audio_seconds": 90.02375799999996,
+        "max_playlist_gap_seconds": 0.622054796986049,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    }
+  ]
+}
