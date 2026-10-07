@@ -67,6 +67,12 @@ chosen track; the backend picks the best match but the app owns the final call.
 
 ### Optional progressive playback
 
+Existing endpoint paths, request bodies and default responses remain compatible.
+The deployed backend enables progressive playback, but clients must opt in with
+`progressive=1`; without it, preparation and polling retain completed-file behavior.
+The main-cache increase to 20 GB does not change the API.
+
+
 When the backend is started with `JUKES_PROGRESSIVE=1`, playback clients can use
 `POST /v1/audio/prepare?progressive=1` and
 `GET /v1/jobs/{job_id}?wait=10&progressive=1`. The JSON body is unchanged.
@@ -168,7 +174,11 @@ radio source.
 
 ## Caches
 
-Requested pool: 10 GB, LRU by accepted prepare/play/download, no TTL. Warmup pool:
+The requested-pool limit is configured with `JUKES_REQUESTED_CACHE_LIMIT_BYTES`
+(default and current deployment: `20000000000`, decimal 20 GB). Increasing this
+limit retains existing cache files and requires no client changes.
+
+Requested pool: 20 GB, LRU by accepted prepare/play/download, no TTL. Warmup pool:
 1 GB, expires 2 h after completion (duplicates don't extend). Polling, HEAD and
 `info=1` never refresh recency. Tracks larger than a pool return `track_too_large` /
 `warmup_too_large` (a too-large *warmup* can still be requested directly if it fits

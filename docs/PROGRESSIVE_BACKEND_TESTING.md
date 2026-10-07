@@ -4,7 +4,7 @@ Scope: backend only. No Android builds or tests run as part of this workflow.
 
 ## Branch and containers
 
-Backend branch: `feat/progressive-audio`, worktree `/tmp/jukes-progressive-backend`.
+Backend branch: `feat/progressive-audio`, worktree `/home/ubuntu/youtube-music-alexa-skill/.worktrees/progressive-audio`.
 Use `docker-compose.benchmark.yml` with a separate project name. Control uses the
 immutable production code image `jukes-admin-metrics:be9ca17`; candidate is built
 from `Dockerfile.benchmark`. Both use the same VPN namespace, provider and HTTP
@@ -47,3 +47,18 @@ cohorts or small pilot samples do not satisfy the gate. Keep progressive opt-in;
 an old app still waits for full completion. Preserve the current image and volumes
 for rollback. If measurements do not establish improvement, retain production and
 leave the feature on its branch/test containers.
+
+## Current production and VM restart
+
+The optimized backend is deployed with `JUKES_PROGRESSIVE=1`,
+`JUKES_PREPARE_OVERLAP=1` and `JUKES_EXTRACTOR_FORKSERVER=1`.
+Existing clients retain file-only behavior unless they request progressive playback.
+The main cache limit is 20 GB; all 488 retained entries (1,633,598,982 bytes) were
+verified unchanged when the limit increased. Warmup remains 1 GB.
+
+`jukes-backend-startup.service` is enabled and was verified after a VM reboot:
+all six production containers restarted and backend health returned OK. The
+startup script restores private Compose overlays from the persistent directory
+`/home/ubuntu/jukes-backend/deployment/optimized/` before starting the serving stack.
+Deployment credentials, snapshots and backups stay outside Git. The rollback
+script is restored to `/tmp/jukes-optimized-deploy/rollback.sh` at startup.

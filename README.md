@@ -8,7 +8,7 @@ runtime has been removed. Git history keeps it.)
 ## What it does
 
 - **Anonymous by default.** No registration or YouTube login for audio or radio.
-- **Two shared audio pools.** *Requested*: 10 GB, LRU, no expiry. *Warmup*:
+- **Two shared audio pools.** *Requested*: 20 GB, LRU, no expiry. *Warmup*:
   1 GB, 2-hour TTL. One physical file per track; a request promotes a warmup
   (even an in-flight one) without copying bytes or downloading twice.
 - **Whole files, ranges.** The VM downloads the complete file first, then serves
