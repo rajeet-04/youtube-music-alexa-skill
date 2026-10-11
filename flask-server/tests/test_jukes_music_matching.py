@@ -106,3 +106,24 @@ def test_concurrent_resolves_share_one_search():
     [t.start() for t in threads]
     [t.join() for t in threads]
     assert len(out) == 4 and len(yt.filters) == 1
+
+
+@pytest.mark.parametrize("spotify_title,listed", [
+    ('Tum Hi Ho - From "Aashiqui 2"', "Tum Hi Ho"),
+    ("Bohemian Rhapsody - Remastered 2011", "Bohemian Rhapsody"),
+    ("Hotel California - 2013 Remaster", "Hotel California"),
+    ("Heeriye (feat. Arijit Singh)", "Heeriye"),
+    ("Calm Down (with Selena Gomez)", "Calm Down"),
+    ("Lag Ja Gale - Studio Version", "Lag Ja Gale"),
+])
+def test_spotify_decorations_do_not_hide_the_song(spotify_title, listed):
+    yt = YT(songs=[item("aaaaaaaaaaa", "Something Else Entirely", ["Other"], "3:00"),
+                   item("bbbbbbbbbbb", listed, ["Main Artist", "Guest"], "3:30")])
+    assert resolve(yt, spotify_title, "Main Artist").video_id == "bbbbbbbbbbb"
+
+
+def test_a_requested_live_version_is_not_stripped():
+    yt = YT(songs=[item("aaaaaaaaaaa", "Song", ["Main Artist"], "3:30"),
+                   item("bbbbbbbbbbb", "Song (Live)", ["Main Artist"], "4:10")])
+    assert resolve(yt, "Song (Live)", "Main Artist").video_id == "bbbbbbbbbbb"
+    assert resolve(yt, "Song", "Main Artist").video_id == "aaaaaaaaaaa"

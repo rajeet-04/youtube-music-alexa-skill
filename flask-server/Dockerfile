@@ -11,6 +11,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PATH="/usr/local/bin:${PATH}"
+# yt-dlp's player/solver cache lives on the persistent data volume: a redeploy then skips
+# re-downloading the player JS and challenge solver on the first extractions.
+ENV XDG_CACHE_HOME=/data/cache
 
 WORKDIR /app
 

@@ -9,12 +9,15 @@ are rejected instead of silently substituted.
 from __future__ import annotations
 
 import difflib
+import logging
 import re
 import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Callable
+
+log = logging.getLogger(__name__)
 
 VIDEO_ID_RE = re.compile(r"\A[A-Za-z0-9_-]{11}\Z")
 
@@ -147,6 +150,19 @@ def _title_precision(query: str, candidate: str, artists: tuple[str, ...]) -> fl
     extra = [t for t in extra if not difflib.get_close_matches(t, wanted, n=1, cutoff=0.8)]
     total = len(_tokens(candidate)) or 1
     return max(0.0, 1.0 - len(extra) / total)
+
+
+_CREDIT_BRACKET = re.compile(
+    r"\s*[(\[]\s*(?:feat\.?|ft\.?|featuring|with|from|(?:\d{4}\s+)?(?:digital\s+)?re-?master(?:ed)?)\b[^)\]]*[)\]]", re.I)
+_PLAIN_SUFFIX = re.compile(
+    r"\s+-\s+(?:from\b.*|(?:\d{4}\s+)?(?:digital\s+)?re-?master(?:ed)?\b.*|(?:mono|stereo|radio edit|studio version|"
+    r"album version|single version|original version|original mix|explicit|deluxe(?: edition)?|bonus track)\s*$)", re.I)
+
+
+def _core_title(title: str) -> str:
+    """Spotify-style title without credits/provenance: ``X - From "Film"`` / ``X (feat. Y)`` -> ``X``."""
+    core = _PLAIN_SUFFIX.sub("", _CREDIT_BRACKET.sub("", title or "")).strip()
+    return core or (title or "").strip()
 
 
 def _clean_artist(name: str | None) -> str:
@@ -308,6 +324,9 @@ class Music:
                     else:
                         raise NoMatch("empty selector")
                 except (NoMatch, RejectedMatch) as miss:
+                    if selector.title:
+                        log.warning("resolve %s: %r by %r (%s ms)", miss.code, selector.title, selector.artist,
+                                 selector.duration_ms)
                     if selector.title and self._negative_ttl > 0:
                         self._store_miss(key, miss)
                     raise
@@ -388,7 +407,7 @@ class Music:
 
     def _by_title(self, client: Any, selector: TrackSelector) -> Track:
         title, artist = selector.title or "", selector.artist or ""
-        query = f"{title} {artist}".strip()
+        query = f"{_core_title(title)} {artist}".strip()
         try:
             return self._pick(self._search(client, query), selector, strict_artist=False)
         except NoMatch:
@@ -400,12 +419,13 @@ class Music:
         title, artist = selector.title or "", selector.artist or ""
         if not items:
             raise NoMatch("no matching song")
+        forms = [title] + ([core] if (core := _core_title(title)) != title else [])
         requested = set(_tokens(title)) | set(_tokens(artist))
         ranked: list[tuple[float, float, int, Track]] = []
         considered = 0
         for rank, item in enumerate(items):
             track = self._track(item)
-            title_score = _score(title, track.title)
+            title_score = max(_score(form, track.title) for form in forms)
             artist_score = _artist_score(artist, track.artists) if artist else 1.0
             if title_score < 0.8 or artist_score < (0.9 if strict_artist else 0.6):
                 continue  # a different song entirely: no match, not a rejection
@@ -421,7 +441,7 @@ class Music:
             elif strict_artist and selector.duration_ms:
                 continue  # an unlisted-length video cannot be verified
             # Precision keeps "Enchanted" from resolving to "Enchanted (Taylor's Version)".
-            precision = _title_precision(title, track.title, track.artists)
+            precision = max(_title_precision(form, track.title, track.artists) for form in forms)
             ranked.append((-(title_score + artist_score + precision), gap, rank, track))
         if not ranked:
             if considered:
