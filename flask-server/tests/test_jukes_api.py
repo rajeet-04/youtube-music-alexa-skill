@@ -80,7 +80,7 @@ def env(tmp_path):
     extractor = FakeExtractor()
     jobs = Jobs(cache, extractor, worker_count=2)
     yt = FakeYT()
-    services = Services(cache=cache, jobs=jobs, music=Music(lambda ctx: yt))
+    services = Services(cache=cache, jobs=jobs, music=Music(lambda ctx: yt, negative_ttl=0))
     settings = Settings(legacy_wait_seconds=0.2)
     app = create_app(settings, services)
     class Env:  # noqa: D401

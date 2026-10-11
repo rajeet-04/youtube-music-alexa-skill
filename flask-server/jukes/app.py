@@ -94,6 +94,7 @@ def build_services(config: CacheConfig | None = None) -> Services:
             # A song's match (title/artist/length -> video) rarely changes; repeat prepares skip
             # the ~1.3 s YouTube Music search for a day.
             cache_ttl=float(os.environ.get("JUKES_RESOLVE_CACHE_SECONDS", 86400)),
+            negative_ttl=float(os.environ.get("JUKES_RESOLVE_MISS_SECONDS", 300)),
         ),
         identity=identity, credentials=credentials,
     )
