@@ -283,7 +283,8 @@ class Music:
         for attempt in attempts:
             try:
                 client = self._client_factory(attempt)
-                data = client.get_watch_playlist(videoId=video_id, radio=True, limit=limit)
+                seed = self._audio_seed(client, video_id)
+                data = client.get_watch_playlist(videoId=seed, radio=True, limit=limit)
             except Exception as error:  # noqa: BLE001
                 last = error
                 if attempt is not ANONYMOUS:
@@ -297,6 +298,31 @@ class Music:
                 status = "anonymous"
             return RadioResult(tuple(tracks[:limit]), status)
         raise UpstreamError("radio lookup failed") from last
+
+    # A song's radio depends on which upload seeds it. YouTube Music seeds with the album-track
+    # (audio) upload; a music-video upload gives a noticeably different radio (about half the
+    # picks for the same song). So a video seed is swapped for its audio upload when one matches.
+    _VIDEO_TYPES = {"MUSIC_VIDEO_TYPE_OMV", "MUSIC_VIDEO_TYPE_UGC"}
+
+    def _audio_seed(self, client: Any, video_id: str) -> str:
+        """The album-track upload of ``video_id``'s song, or ``video_id`` itself when unsure."""
+        key = ("audio-seed", video_id)
+        if (hit := self._cached(key)) is not None:
+            return hit.video_id
+        seed = video_id
+        try:
+            data = client.get_watch_playlist(videoId=video_id, limit=1)
+            first = ((data or {}).get("tracks") or [None])[0]
+            if isinstance(first, dict) and first.get("videoId") == video_id \
+                    and first.get("videoType") in self._VIDEO_TYPES:
+                track = self._track(first)
+                selector = TrackSelector(title=track.title, artist=" ".join(track.artists),
+                                         duration_ms=track.duration_ms)
+                seed = self._by_title(client, selector).video_id
+        except Exception:  # noqa: BLE001  # no audio twin found: keep the requested id
+            seed = video_id
+        self._store(key, Track(video_id=seed, title=""))
+        return seed
 
     # -- resolution ----------------------------------------------------
     def resolve(self, selector: TrackSelector, context: UserContext = ANONYMOUS) -> Track:
