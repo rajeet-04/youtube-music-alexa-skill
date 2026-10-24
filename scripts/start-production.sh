@@ -14,7 +14,10 @@ while [ "$(docker inspect --format '{{.State.Health.Status}}' gluetun)" != healt
     [ "$count" -lt 90 ] || { echo 'VPN health timed out' >&2; exit 1; }
     sleep 2
 done
-for container in jukes-backend-bgutil-provider-1 youtube-browser ytmusic caddy cloudflared; do
+docker start jukes-backend-bgutil-provider-1 >/dev/null
+# Optional fast path: without it ytmusic still extracts every song with yt-dlp.
+docker start ytresolver >/dev/null 2>&1 || echo 'ytresolver unavailable; using yt-dlp only' >&2
+for container in youtube-browser ytmusic caddy cloudflared; do
     docker start "$container" >/dev/null
 done
 count=0

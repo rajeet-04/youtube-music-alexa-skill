@@ -141,3 +141,18 @@ def test_recovery_reclaims_orphaned_pending_observers(tmp_path):
     restarted=collector(tmp_path,clock)
     with restarted.store.connection() as c:
         assert c.execute('SELECT COUNT(*) FROM jukes_metrics_pending').fetchone()[0]==0
+
+
+def test_extraction_source_split_is_reported_separately(tmp_path):
+    clock = [100000.0]
+    m = collector(tmp_path, clock)
+    m.record('extraction_source', category='fast', duration_seconds=0.5)
+    m.record('extraction_source', category='fast', duration_seconds=0.7)
+    m.record('extraction_source', category='ytdlp', duration_seconds=3.5)
+    m.record('fast_fallback')
+    window = m.snapshot()['windows']['24h']
+    assert window['latency']['fast']['total_count'] == 2
+    assert window['latency']['fast']['average_seconds'] == pytest.approx(0.6)
+    assert window['latency']['ytdlp']['p50_seconds'] == 3.5
+    assert window['latency']['all']['total_count'] == 0  # source timings never mix into preparation latency
+    assert window['counters']['fast_fallback'] == 1

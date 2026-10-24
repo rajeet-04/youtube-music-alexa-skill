@@ -66,6 +66,8 @@ class Jobs:
         self.metrics = cache.metrics
         if hasattr(extractor, "on_retry"):
             extractor.on_retry = lambda: self.metrics.record("retry_fallback")
+        if hasattr(extractor, "on_fast_fallback"):
+            extractor.on_fast_fallback = lambda: self.metrics.record("fast_fallback")
         self.worker_count = max(1, worker_count)
         self.max_warmup_workers = (
             max_warmup_workers if max_warmup_workers is not None else 1
@@ -417,11 +419,13 @@ class Jobs:
         key = job.key
         error_code: str | None = None
         run_started = time.monotonic()
+        source: str | None = None
         try:
             reservation = self.cache.reserve(key, requested=self._current(job.job_id).requested)
             if reservation.cached_entry is None:
                 snapshot = self._snapshot()
                 result = self.extractor.download(key, reservation, snapshot)
+                source = 'fast' if getattr(result, 'client', None) == 'fast' else 'ytdlp'
                 requested = self._current(job.job_id).requested
                 self.cache.complete(key, result.path, requested=requested)
         except ExtractionError as error:
@@ -444,6 +448,8 @@ class Jobs:
                 return  # leave persisted state recoverable
             if error_code is None:
                 self.metrics.record('job_timing',category='extraction',duration_seconds=max(0,time.monotonic()-run_started),once=job.job_id)
+                if source is not None:
+                    self.metrics.record('extraction_source',category=source,duration_seconds=max(0,time.monotonic()-run_started),once=job.job_id)
                 self._set(job.job_id, status="ready", error_code=None)
             else:
                 self._set(job.job_id, status="failed", error_code=error_code)
