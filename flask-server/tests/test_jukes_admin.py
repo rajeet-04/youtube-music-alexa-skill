@@ -141,6 +141,27 @@ def test_login_requires_csrf_token_and_is_rate_limited(env):
     assert codes[5:] == [429, 429]
 
 
+def test_stale_login_form_is_refreshed_and_never_counts_against_the_limit(env):
+    for _ in range(10):
+        r = env.client.post("/admin/login", data={"csrf": "stale", "password": PASSWORD})
+        assert r.status_code == 403 and "expired" in r.get_data(as_text=True)
+    assert login(env).status_code == 303
+
+
+def test_sign_in_tabs_from_one_browser_share_a_valid_token(env):
+    first = re.search(r'name="csrf" value="([^"]+)"', env.client.get("/admin/login").get_data(as_text=True)).group(1)
+    second = re.search(r'name="csrf" value="([^"]+)"', env.client.get("/admin/login").get_data(as_text=True)).group(1)
+    assert first == second
+    assert env.client.post("/admin/login", data={"csrf": first, "password": PASSWORD}).status_code == 303
+
+
+def test_wrong_password_shows_the_form_again_and_rate_limit_says_when_to_retry(env):
+    r = login(env, password="wrong")
+    assert r.status_code == 401 and "Incorrect password." in r.get_data(as_text=True)
+    codes = [login(env, password="nope") for _ in range(6)]
+    assert codes[-1].status_code == 429 and int(codes[-1].headers["Retry-After"]) > 0
+
+
 def test_missing_configuration_fails_closed(env, tmp_path):
     app = create_app(Settings(), env.services, AdminConfig(), None)
     c = app.test_client()

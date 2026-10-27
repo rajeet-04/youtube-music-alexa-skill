@@ -29,6 +29,7 @@ from .resources import ResourceSampler
 
 SESSION_COOKIE = "jukes_admin"
 LOGIN_COOKIE = "jukes_login_csrf"
+LOGIN_TTL = 3600  # a sign-in page can sit open this long before its token goes stale
 SESSION_TTL = 12 * 3600
 LEASE_TTL = 15 * 60
 MAX_UPLOAD = 1_000_000
@@ -158,32 +159,41 @@ def make_admin(config: AdminConfig, services, cookies: ServerCookies | None,
         return no_store(response)
 
     # -- login / logout ---------------------------------------------------
+    def login_token(current: str) -> str:
+        # Reuse the browser's token while it is still usable, so every sign-in tab
+        # opened from this browser stays valid instead of invalidating the others.
+        return current if len(current) >= 32 else secrets.token_urlsafe(24)
+
+    def login_page(status: int, error: str | None, token: str) -> Response:
+        response = make_response(render_template("admin_login.html", csrf=token, error=error), status)
+        response.set_cookie(LOGIN_COOKIE, token, max_age=LOGIN_TTL, httponly=True, samesite="Strict",
+                            secure=config.secure_cookies, path="/admin")
+        return response
+
     @bp.get("/admin/login")
     def login_form():
         if not config.enabled:
             return deny(503, "admin_not_configured")
-        token = secrets.token_urlsafe(24)
-        response = make_response(render_template("admin_login.html", csrf=token, error=None))
-        response.set_cookie(LOGIN_COOKIE, token, max_age=600, httponly=True, samesite="Strict",
-                            secure=config.secure_cookies, path="/admin")
-        return response
+        return login_page(200, None, login_token(request.cookies.get(LOGIN_COOKIE, "")))
 
     @bp.post("/admin/login")
     def login():
         if not config.enabled:
             return deny(503, "admin_not_configured")
-        wait = limiter.check("admin_login", caller(), config.login_per_minute)
-        if wait:
-            response = deny(429, "rate_limited")
-            response.headers["Retry-After"] = str(wait)
-            return response
         supplied = request.form.get("csrf", "")
         expected = request.cookies.get(LOGIN_COOKIE, "")
         if not expected or not hmac.compare_digest(supplied, expected):
-            return deny(403, "csrf_failed")
+            # A stale or expired form is not a password guess: show a fresh form, uncounted.
+            return login_page(403, "This sign-in form expired. Please try again.", login_token(expected))
+        # Only real password checks count against the limit, so a stale form never locks a user out.
+        wait = limiter.check("admin_login", caller(), config.login_per_minute)
+        if wait:
+            response = login_page(429, f"Too many sign-in attempts. Try again in {wait} seconds.", expected)
+            response.headers["Retry-After"] = str(wait)
+            return response
         password = request.form.get("password", "")
         if not password or len(password) > 1024 or not check_password_hash(config.password_hash, password):
-            return deny(401, "invalid_credentials")
+            return login_page(401, "Incorrect password.", expected)
         sid, csrf = secrets.token_urlsafe(24), secrets.token_urlsafe(24)
         now = clock()
         with store.transaction() as connection:
