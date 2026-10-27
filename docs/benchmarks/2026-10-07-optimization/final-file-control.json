@@ -1,0 +1,24 @@
+{
+  "summary": {
+    "requests": 1,
+    "cold_successes": 1,
+    "cold_failures": 0,
+    "cache_hits_excluded": 0,
+    "post_start_failures": 0,
+    "max_buffer_deficit_seconds": 0.0,
+    "first_audio_p95_seconds": 10.695947281987173,
+    "completion_p95_seconds": 10.679947461001575,
+    "first_audio_max_seconds": 10.695947281987173
+  },
+  "rows": [
+    {
+      "video_id": "-0YEJbeTXEk",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 10.695947281987173,
+      "complete_seconds": 10.679947461001575,
+      "streamed": false,
+      "error": null
+    }
+  ]
+}

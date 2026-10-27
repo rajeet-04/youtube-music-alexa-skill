@@ -1,0 +1,202 @@
+{
+  "summary": {
+    "requests": 11,
+    "cold_successes": 11,
+    "cold_failures": 0,
+    "cache_hits_excluded": 0,
+    "post_start_failures": 0,
+    "max_buffer_deficit_seconds": 0.0,
+    "first_audio_p95_seconds": 8.622942768997746,
+    "completion_p95_seconds": 9.430079244979424,
+    "first_audio_max_seconds": 8.622942768997746
+  },
+  "rows": [
+    {
+      "video_id": "I_hYJHKEeMw",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 7.815295808017254,
+      "complete_seconds": 8.284754181018798,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 85,
+        "bytes": 2975476,
+        "audio_seconds": 168.48401700000008,
+        "max_playlist_gap_seconds": 0.18486129099619575,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "ZMGNAvNs_20",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 8.622942768997746,
+      "complete_seconds": 9.263467554003,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 80,
+        "bytes": 2807968,
+        "audio_seconds": 158.84777400000007,
+        "max_playlist_gap_seconds": 0.14773132797563449,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "N80sL5vf22M",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 7.853768422995927,
+      "complete_seconds": 8.486667580989888,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 201,
+        "bytes": 7076696,
+        "audio_seconds": 400.2191180000004,
+        "max_playlist_gap_seconds": 0.1885215229995083,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "RIcp9nsyar4",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 8.408679740998195,
+      "complete_seconds": 9.430079244979424,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 142,
+        "bytes": 5004560,
+        "audio_seconds": 282.7958740000005,
+        "max_playlist_gap_seconds": 0.1767567799834069,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "W5OyrCwiUdI",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 5.26046162302373,
+      "complete_seconds": 5.371315950003918,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 81,
+        "bytes": 2826768,
+        "audio_seconds": 160.05512900000008,
+        "max_playlist_gap_seconds": 0.017147028993349522,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "rjbfnJNbtzQ",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 7.553988700994523,
+      "complete_seconds": 8.067654459999176,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 98,
+        "bytes": 3457508,
+        "audio_seconds": 195.8372600000002,
+        "max_playlist_gap_seconds": 0.11077072599437088,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "kPa7bsKwL-c",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 7.95867710901075,
+      "complete_seconds": 8.895280715019908,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 127,
+        "bytes": 4466316,
+        "audio_seconds": 252.35447600000046,
+        "max_playlist_gap_seconds": 0.36977922401274554,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "aoouUC4mcWg",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 8.272613606008235,
+      "complete_seconds": 8.948447617993224,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 148,
+        "bytes": 5211172,
+        "audio_seconds": 295.05603900000045,
+        "max_playlist_gap_seconds": 0.10839490502257831,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "j5WqmNr3jOY",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 5.128722038993146,
+      "complete_seconds": 7.042132164002396,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 68,
+        "bytes": 2377636,
+        "audio_seconds": 134.55967599999997,
+        "max_playlist_gap_seconds": 0.7347232059983071,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "h6AivR3_MHs",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 5.188678923994303,
+      "complete_seconds": 5.3105972269841,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 69,
+        "bytes": 2413920,
+        "audio_seconds": 136.97458699999996,
+        "max_playlist_gap_seconds": 0.011494420003145933,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "P0pNGc8NJeM",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 5.800427579000825,
+      "complete_seconds": 6.237365789012983,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 164,
+        "bytes": 5768780,
+        "audio_seconds": 327.12279200000046,
+        "max_playlist_gap_seconds": 0.12430276401573792,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    }
+  ]
+}

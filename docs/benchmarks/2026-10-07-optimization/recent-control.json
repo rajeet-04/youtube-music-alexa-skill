@@ -1,0 +1,114 @@
+{
+  "summary": {
+    "requests": 11,
+    "cold_successes": 11,
+    "cold_failures": 0,
+    "cache_hits_excluded": 0,
+    "post_start_failures": 0,
+    "max_buffer_deficit_seconds": 0.0,
+    "first_audio_p95_seconds": 8.769775531982305,
+    "completion_p95_seconds": 8.750554882979486,
+    "first_audio_max_seconds": 8.769775531982305
+  },
+  "rows": [
+    {
+      "video_id": "RIcp9nsyar4",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 7.765490805002628,
+      "complete_seconds": 7.734030207997421,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "N80sL5vf22M",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 8.487654605996795,
+      "complete_seconds": 8.45571616498637,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "ZMGNAvNs_20",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 8.673660845000995,
+      "complete_seconds": 8.649673114006873,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "I_hYJHKEeMw",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 8.769775531982305,
+      "complete_seconds": 8.750554882979486,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "kPa7bsKwL-c",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 6.9749083619972225,
+      "complete_seconds": 6.945093138987431,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "W5OyrCwiUdI",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 7.108075535012176,
+      "complete_seconds": 7.048308529017959,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "aoouUC4mcWg",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 7.702855693991296,
+      "complete_seconds": 7.680537177977385,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "rjbfnJNbtzQ",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 8.205278239998734,
+      "complete_seconds": 8.194947348994901,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "j5WqmNr3jOY",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 6.446827150997706,
+      "complete_seconds": 6.423357024992583,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "h6AivR3_MHs",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 7.702041848009685,
+      "complete_seconds": 7.667200900992611,
+      "streamed": false,
+      "error": null
+    },
+    {
+      "video_id": "P0pNGc8NJeM",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 8.409885364002548,
+      "complete_seconds": 8.39246033100062,
+      "streamed": false,
+      "error": null
+    }
+  ]
+}

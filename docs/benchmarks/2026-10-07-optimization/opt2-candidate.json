@@ -1,0 +1,83 @@
+{
+  "summary": {
+    "requests": 4,
+    "cold_successes": 4,
+    "cold_failures": 0,
+    "cache_hits_excluded": 0,
+    "post_start_failures": 0,
+    "max_buffer_deficit_seconds": 0.0,
+    "first_audio_p95_seconds": 9.975968487997307,
+    "completion_p95_seconds": 10.774380949995248,
+    "first_audio_max_seconds": 9.975968487997307
+  },
+  "rows": [
+    {
+      "video_id": "JGwWNGJdvx8",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 6.984445900976425,
+      "complete_seconds": 8.461721291998401,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 132,
+        "bytes": 4652436,
+        "audio_seconds": 263.2679420000005,
+        "max_playlist_gap_seconds": 0.1391073839913588,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "9bZkp7q19f0",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 6.948758865997661,
+      "complete_seconds": 8.391770036017988,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 127,
+        "bytes": 4456728,
+        "audio_seconds": 252.26158700000047,
+        "max_playlist_gap_seconds": 0.14129408201551996,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "kJQP7kiw5Fk",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 6.952225977001945,
+      "complete_seconds": 8.513311585003976,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 141,
+        "bytes": 4984068,
+        "audio_seconds": 281.56529600000044,
+        "max_playlist_gap_seconds": 0.10969016500166617,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    },
+    {
+      "video_id": "lYBUbBu4W08",
+      "cold": true,
+      "state": "ready",
+      "first_audio_seconds": 9.975968487997307,
+      "complete_seconds": 10.774380949995248,
+      "streamed": true,
+      "error": null,
+      "stream_validation": {
+        "segments": 107,
+        "bytes": 3780304,
+        "audio_seconds": 213.62371300000027,
+        "max_playlist_gap_seconds": 0.2721697530068923,
+        "max_buffer_deficit_seconds": 0.0,
+        "decoded": true
+      }
+    }
+  ]
+}

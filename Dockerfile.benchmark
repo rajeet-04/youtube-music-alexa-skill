@@ -1,0 +1,19 @@
+ARG BASE_IMAGE=jukes-admin-metrics:be9ca17
+FROM ${BASE_IMAGE} AS candidate
+COPY flask-server/ /app/
+COPY scripts/ /bench/
+ENV JUKES_COOKIE_AUTOREFRESH=0
+
+FROM ${BASE_IMAGE} AS fixture_control
+COPY scripts/ /bench/
+CMD ["python", "/bench/serve_benchmark_fixture.py"]
+
+FROM candidate AS fixture_candidate
+CMD ["python", "/bench/serve_benchmark_fixture.py"]
+
+FROM candidate AS tests
+RUN uv pip install --system --no-cache pytest
+COPY . /repo/
+WORKDIR /repo
+ENV PYTHONPATH=/repo/flask-server
+CMD ["python", "-m", "pytest", "flask-server/tests", "-q"]

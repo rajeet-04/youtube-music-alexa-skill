@@ -11,8 +11,12 @@ EVENTS = frozenset(('job_completed', 'job_failed', 'prepare_success', 'prepare_f
     'eviction', 'warmup_eviction', 'warmup_expiration', 'missing_result',
     'warmup_request', 'warmup_duplicate', 'warmup_cached', 'warmup_started',
     'warmup_success', 'warmup_consumed', 'warmup_inflight', 'warmup_failed',
-    'admission_rejected', 'latency_dropped', 'job_timing', 'prepare_outcome_unknown'))
-CATEGORIES = ('all', 'cold', 'cached', 'joined', 'promoted', 'warmed', 'recovered', 'queue', 'extraction')
+    'admission_rejected', 'latency_dropped', 'job_timing', 'prepare_outcome_unknown',
+    'extraction_source', 'fast_fallback'))
+# 'fast'/'ytdlp' split successful extractions by source (the warm sidecar vs yt-dlp).
+CATEGORIES = ('all', 'cold', 'cached', 'joined', 'promoted', 'warmed', 'recovered', 'queue', 'extraction',
+    'fast', 'ytdlp')
+SOURCE_CATEGORIES = ('fast', 'ytdlp')
 WINDOWS = {'15m': 900, '1h': 3600, '24h': 86400}
 
 
@@ -120,7 +124,7 @@ class Metrics:
                 counters[r['name']] = counters.get(r['name'], 0)+r['count']
             latency = {}
             for category in CATEGORIES:
-                relevant = [r for r in rows if (r['category'] == category or (category == 'all' and r['category'] in ('cold','cached','joined','promoted','warmed','recovered'))) and r['name'] == ('job_timing' if category in ('queue','extraction') else 'prepare_success')]
+                relevant = [r for r in rows if (r['category'] == category or (category == 'all' and r['category'] in ('cold','cached','joined','promoted','warmed','recovered'))) and r['name'] == ('job_timing' if category in ('queue','extraction') else 'extraction_source' if category in SOURCE_CATEGORIES else 'prepare_success')]
                 count = sum(r['duration_count'] for r in relevant)
                 values = [s['duration'] for s in samples if (s['category'] == category or (category == 'all' and s['category'] in ('cold','cached','joined','promoted','warmed','recovered'))) and s['at'] >= cutoff]
                 latency[category] = self._latency(values, count)

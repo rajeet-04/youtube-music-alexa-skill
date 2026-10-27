@@ -1,0 +1,17 @@
+[Unit]
+Description=Start deployed JUKES backend and serving dependencies
+Requires=docker.service
+Wants=network-online.target
+After=docker.service network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/home/ubuntu/jukes-backend/scripts/start-production.sh
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=30
+TimeoutStartSec=360
+
+[Install]
+WantedBy=multi-user.target

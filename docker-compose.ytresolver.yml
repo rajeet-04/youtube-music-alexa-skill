@@ -1,0 +1,21 @@
+# Warm YouTube Music resolver sidecar. It joins the VPN container's network namespace,
+# like ytmusic and bgutil, and listens on 127.0.0.1:4417 there only.
+# Deploy: docker compose -p jukes-ytresolver -f docker-compose.ytresolver.yml up -d --build
+# ytmusic uses it when JUKES_FAST_RESOLVER_URL=http://127.0.0.1:4417 (unset to disable).
+services:
+  ytresolver:
+    build: ./ytresolver
+    image: jukes-ytresolver:latest
+    container_name: ytresolver
+    restart: unless-stopped
+    network_mode: "container:${VPN_CONTAINER_NAME:-gluetun}"
+    environment:
+      BGUTIL_URL: http://127.0.0.1:4416
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 320m
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "3"}

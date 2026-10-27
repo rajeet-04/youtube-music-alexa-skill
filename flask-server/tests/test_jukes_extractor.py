@@ -101,7 +101,8 @@ def test_ytdlp_client_order_and_current_compatible_format_policy(monkeypatch, ca
             if "--extractor-args" in command else "default" for command in commands] == [
         "tv_simply", "web_embedded", "default", "android_vr"
     ]
-    assert "140/bestaudio[ext=m4a]/bestaudio/best" in commands[0]
+    assert "140[vcodec=none]/bestaudio[ext=m4a][vcodec=none]/bestaudio[vcodec=none]" in commands[0]
+    assert commands[0][-1] == "https://music.youtube.com/watch?v=fallback-order"
     assert "--remote-components" in commands[0]
     assert "ejs:github" in commands[0]
     assert "--js-runtimes" in commands[0]
@@ -114,6 +115,71 @@ def test_ytdlp_client_order_and_current_compatible_format_policy(monkeypatch, ca
     assert result.media_format == "mp4"
     assert result.duration_seconds == 12.5
     assert reservation.path.read_bytes() == b"valid-audio"
+
+
+def test_validation_rejects_combined_video_and_audio(cache):
+    extractor = Extractor(media_probe=lambda path: {
+        "format_name": "mp4", "duration": "10", "streams": [
+            {"codec_type": "audio", "codec_name": "aac"},
+            {"codec_type": "video", "codec_name": "h264"},
+        ]})
+    reservation = cache.reserve(AudioKey("combined", "p"), requested=True)
+    reservation.write(b"combined-media")
+    with pytest.raises(ExtractionError, match="validation"):
+        extractor._validate(reservation, "tv_simply")
+
+
+def test_public_probe_uses_music_url():
+    commands = []
+    def spawn(args, **kwargs):
+        commands.append(args)
+        return FakeProcess(args, payload=b'{"availability":"public"}')
+    extractor = Extractor(process_factory=spawn)
+    assert extractor._probe_public_audio(AudioKey("public-song", "p"), 5)
+    assert commands[0][-1] == "https://music.youtube.com/watch?v=public-song"
+
+
+def test_progressive_download_keeps_capacity_checks_batched(tmp_path):
+    payload=b'a'*1_048_576
+    class Destination:
+        path=tmp_path/'source.partial'
+        writes=0
+        def write(self,data):
+            self.writes+=1
+            with self.path.open('ab') as output: output.write(data)
+    destination=Destination(); destination.path.touch()
+    extractor=Extractor(process_factory=lambda args,**kw: FakeProcess(args,payload=payload),
+        media_probe=lambda path: {'format_name':'mp4','streams':[{'codec_type':'audio','codec_name':'aac'}]})
+    extractor._attempt(AudioKey('song','p'),destination,'tv_simply',None,5)
+    assert destination.path.read_bytes()==payload
+    assert destination.writes<=6  # Avoid 32 capacity/database scans per MiB.
+
+
+def test_old_clients_do_not_start_a_progressive_encoder(cache):
+    class Streams:
+        def wanted(self,key): return False
+        def begin(self,*args): raise AssertionError('old client started an encoder')
+    def spawn(args,**kwargs):
+        if '--print-to-file' in args:
+            Path(args[args.index('--print-to-file')+2]).write_text('{"duration":12,"acodec":"aac","abr":128}')
+        return FakeProcess(args,payload=b'audio')
+    extractor=Extractor(process_factory=spawn,media_probe=lambda path:{
+        'format_name':'mp4','streams':[{'codec_type':'audio','codec_name':'aac'}]})
+    extractor.streams=Streams()
+    reservation=cache.reserve(AudioKey('old-client','p'),requested=True)
+    extractor._attempt(reservation.key,reservation,'tv_simply',None,5)
+
+
+def test_rate_limit_after_publication_still_applies_cooldown(cache):
+    class Streams:
+        def published(self,key): return True
+    extractor=Extractor(clock=lambda:100)
+    extractor.streams=Streams()
+    def rate_limit(*args): raise ExtractionError('rate_limited')
+    extractor._attempt=rate_limit
+    reservation=cache.reserve(AudioKey('limited','p'),requested=True)
+    with pytest.raises(ExtractionError): extractor.download(reservation.key,reservation,None)
+    assert extractor.cooldown_remaining()>0
 
 
 def test_cookie_snapshot_path_is_unique_private_and_removed_after_download(monkeypatch, cache: Cache):
@@ -441,3 +507,122 @@ def test_client_order_can_be_overridden_without_a_rebuild(monkeypatch):
     assert module.client_order() == ("web_embedded", "default")
     monkeypatch.setenv("YTDLP_CLIENT_ORDER", " , ")
     assert module.client_order() == module.CLIENT_ORDER
+
+
+# -- warm resolver sidecar ("fast" pseudo-client) -----------------------------------------
+
+AAC_PROBE = {"format_name": "mov,mp4,m4a,3gp,3g2,mj2", "duration": "3",
+             "streams": [{"codec_type": "audio", "codec_name": "aac"}]}
+
+
+@pytest.fixture
+def sidecar():
+    """Loopback stand-in for ytresolver: per-video (status, body, advertised length)."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    routes, seen = {}, []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            video = self.path.rsplit("/", 1)[-1]
+            seen.append(self.path)
+            status, body, length = routes.get(video, (404, b'{"error":"track_unavailable"}', None))
+            self.send_response(status)
+            self.send_header("Content-Length", str(length if length is not None else len(body)))
+            self.send_header("X-Duration-Seconds", "3")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_address[1]}", routes, seen
+    server.shutdown()
+    server.server_close()
+
+
+def _fast_extractor(base_url, commands, **kwargs):
+    def spawn(args, **kw):
+        commands.append(list(args))
+        return FakeProcess(args, payload=b"ytdlp-audio")
+    return Extractor(process_factory=spawn, public_audio_probe=lambda key, timeout: True,
+                     media_probe=lambda path: AAC_PROBE, fast_resolver_url=base_url, **kwargs)
+
+
+def test_fast_path_serves_the_song_without_spawning_ytdlp(sidecar, cache):
+    base, routes, seen = sidecar
+    routes["fast-song"] = (200, b"fast-audio", None)
+    commands = []
+    extractor = _fast_extractor(base, commands)
+    retries = []
+    extractor.on_retry = lambda: retries.append(1)
+    reservation = cache.reserve(AudioKey("fast-song", "public-m4a-v1"), requested=True)
+
+    result = extractor.download(AudioKey("fast-song", "public-m4a-v1"), reservation, None)
+
+    assert result.client == "fast"
+    assert reservation.path.read_bytes() == b"fast-audio"
+    assert commands == [] and retries == []
+    assert seen == ["/audio/fast-song"]
+
+
+@pytest.mark.parametrize("route", [
+    (404, b'{"error":"track_unavailable"}', None),   # YTMUSIC refuses it
+    (503, b'{"error":"busy"}', None),
+    (200, b"half", 100),                              # stream ended before Content-Length
+])
+def test_fast_failures_fall_back_to_ytdlp_without_terminal_or_cooldown_state(sidecar, cache, route):
+    base, routes, seen = sidecar
+    routes["fallback-song"] = route
+    commands, fallbacks, retries = [], [], []
+    extractor = _fast_extractor(base, commands)
+    extractor.on_fast_fallback = lambda: fallbacks.append(1)
+    extractor.on_retry = lambda: retries.append(1)
+    key = AudioKey("fallback-song", "public-m4a-v1")
+
+    result = extractor.download(key, cache.reserve(key, requested=True), None)
+
+    assert result.client == "tv_simply"
+    assert len(commands) == 1 and fallbacks == [1]
+    assert retries == []  # the first yt-dlp client is not a yt-dlp retry
+    assert extractor._cached_failure("fallback-song") is None
+    assert extractor.cooldown_remaining() == 0
+
+
+def test_unreachable_sidecar_falls_back(cache):
+    commands = []
+    extractor = _fast_extractor("http://127.0.0.1:9", commands)
+    key = AudioKey("no-sidecar", "public-m4a-v1")
+    assert extractor.download(key, cache.reserve(key, requested=True), None).client == "tv_simply"
+
+
+def test_fast_path_is_off_without_configuration(monkeypatch, cache):
+    monkeypatch.delenv("JUKES_FAST_RESOLVER_URL", raising=False)
+    commands = []
+    extractor = Extractor(process_factory=lambda args, **kw: commands.append(args) or FakeProcess(args),
+                          media_probe=lambda path: AAC_PROBE)
+    key = AudioKey("off", "public-m4a-v1")
+    assert extractor.fast_resolver_url is None
+    assert extractor.download(key, cache.reserve(key, requested=True), None).client == "tv_simply"
+
+
+def test_fast_path_writes_stream_copy_hints_for_progressive_output(sidecar, cache):
+    base, routes, _ = sidecar
+    routes["hinted"] = (200, b"fast-audio", None)
+    seen = []
+
+    class Streams:
+        def wanted(self, key): return True
+        def published(self, key): return False
+        def begin(self, key, metadata, source_path=None):
+            seen.append(metadata)
+            return None
+
+    extractor = _fast_extractor(base, [])
+    extractor.streams = Streams()
+    key = AudioKey("hinted", "public-m4a-v1")
+    extractor.download(key, cache.reserve(key, requested=True), None)
+    assert seen == [{"acodec": "mp4a.40.2", "abr": 128, "duration": 3.0}]
