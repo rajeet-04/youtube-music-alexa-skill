@@ -153,11 +153,13 @@ export async function relay(req, res, video, { resolver, fetchImpl = fetch, chun
       if (i + parallel < count) opened[i + parallel] = guard(openRange(media, i + parallel));
       let got = 0;
       for await (const block of response.body) {
+        response.arm();
         if (sent === 0) onFirstByte();
         got += block.length;
         sent += block.length;
         if (!res.write(block)) await new Promise(resolve => res.once('drain', resolve));
       }
+      response.disarm();
       if (got !== rangeEnd(media, i) - i * chunkBytes + 1) throw new ResolveError('short_range');
     }
     res.end();
@@ -173,12 +175,22 @@ export async function relay(req, res, video, { resolver, fetchImpl = fetch, chun
 
   async function openRange(media, i) {
     const start = i * chunkBytes, end = rangeEnd(media, i);
-    const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(chunkTimeoutMs)]);
+    // The deadline is idle time, not total time: a slow but moving stream must not be killed
+    // and restarted from scratch by the slower yt-dlp path.
+    const stall = new AbortController();
+    let timer;
+    const disarm = () => clearTimeout(timer);
+    const arm = () => { disarm(); timer = setTimeout(() => stall.abort(), chunkTimeoutMs); };
+    const signal = AbortSignal.any([abort.signal, stall.signal]);
     let response;
+    arm();
     try {
       response = await fetchImpl(media.url, { headers: { Range: `bytes=${start}-${end}` }, signal });
-    } catch { throw new ResolveError(abort.signal.aborted ? 'client_closed' : 'upstream_unavailable'); }
+    } catch { disarm(); throw new ResolveError(abort.signal.aborted ? 'client_closed' : 'upstream_unavailable'); }
+    response.arm = arm;
+    response.disarm = disarm;
     if (response.status !== 206 || response.headers.get('content-range') !== `bytes ${start}-${end}/${media.length}`) {
+      disarm();
       response.body?.cancel().catch(() => {});
       const code = response.status === 429 ? 'upstream_rate_limited' : 'upstream_error';
       throw new ResolveError(code, response.status);

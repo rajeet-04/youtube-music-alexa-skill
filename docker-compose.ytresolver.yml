@@ -11,6 +11,7 @@ services:
     network_mode: "container:${VPN_CONTAINER_NAME:-gluetun}"
     environment:
       BGUTIL_URL: http://127.0.0.1:4416
+      YTRESOLVER_MAX_ACTIVE: "10"  # above JUKES_WORKERS (8), or the extra downloads fall back to slow yt-dlp
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]

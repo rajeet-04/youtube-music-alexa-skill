@@ -160,3 +160,45 @@ function fakeRes() {
     on(e, f) { listeners[e] = f; }, off() {}, once() {},
     writeHead() { this.headersSent = true; }, write() { return true; }, end() { this.ended = true; } };
 }
+
+// A body that yields `blocks` pieces `gapMs` apart and honours the abort signal.
+function slowFetch(blocks, gapMs, length, signal0) {
+  return async (url, init) => {
+    const [, a, b] = /bytes=(\d+)-(\d+)/.exec(init.headers.Range);
+    let sent = 0;
+    const body = new ReadableStream({
+      async pull(controller) {
+        await new Promise((resolve, reject) => {
+          const t = setTimeout(resolve, gapMs);
+          init.signal.addEventListener('abort', () => { clearTimeout(t); reject(new Error('aborted')); }, { once: true });
+        });
+        if (sent >= blocks) return controller.close();
+        sent++;
+        controller.enqueue(new Uint8Array((Number(b) - Number(a) + 1) / blocks).fill(1));
+      } });
+    return new Response(body, { status: 206, headers: { 'content-range': `bytes ${a}-${b}/${length}` } });
+  };
+}
+
+test('a slow but moving range is not killed by the idle deadline', async () => {
+  const s = await serve(async (req, res) => {
+    await relay(req, res, VIDEO, { resolver: mediaResolver(8), fetchImpl: slowFetch(4, 40, 8), chunkBytes: 8,
+      chunkTimeoutMs: 100 });
+  });
+  const body = Buffer.from(await (await fetch(s.base)).arrayBuffer());
+  await s.close();
+  assert.equal(body.length, 8); // ~160 ms in total, more than the 100 ms idle limit
+});
+
+test('a stalled range is aborted after the idle deadline', async () => {
+  let failure;
+  const s = await serve(async (req, res) => {
+    try {
+      await relay(req, res, VIDEO, { resolver: mediaResolver(8), fetchImpl: slowFetch(4, 400, 8), chunkBytes: 8,
+        chunkTimeoutMs: 100 });
+    } catch (error) { failure = error; res.destroy(); }
+  });
+  await fetch(s.base).then(r => r.arrayBuffer()).catch(() => {});
+  await s.close();
+  assert.ok(failure, 'a stalled body must fail instead of hanging'); // server.mjs logs it as relay_failed
+});

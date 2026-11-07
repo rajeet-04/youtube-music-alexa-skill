@@ -99,6 +99,8 @@ def build_services(config: CacheConfig | None = None) -> Services:
         identity=identity, credentials=credentials,
     )
     services.server_cookies = server_cookies
+    if (keepalive := _int_env("JUKES_MUSIC_KEEPALIVE_SECONDS", 45)):
+        services.music.start_keepalive(keepalive)
     return services
 
 

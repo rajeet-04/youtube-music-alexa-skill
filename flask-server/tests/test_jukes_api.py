@@ -580,6 +580,18 @@ def test_resolve_only_warmup_prewarms_resolver_unless_cached(env):
     assert env.extractor.prewarmed == [VID]  # already downloaded: nothing to warm
 
 
+def test_music_keepalive_pings_the_client(env):
+    pings = []
+    original = env.yt.get_watch_playlist
+    env.yt.get_watch_playlist = lambda videoId, limit=1, radio=False: (pings.append(videoId), original(videoId))[1]
+    stop = env.app.extensions["jukes"].music.start_keepalive(0.01)
+    deadline = time.time() + 3
+    while len(pings) < 2 and time.time() < deadline:
+        time.sleep(0.01)
+    stop.set()
+    assert len(pings) >= 2
+
+
 def test_warmup_source_counts_start_and_first_use(env):
     first = post(env, '/v1/warmup?source=queue', {'video_id': VID})
     post(env, '/v1/warmup?source=queue', {'video_id': VID})  # duplicate: not counted again

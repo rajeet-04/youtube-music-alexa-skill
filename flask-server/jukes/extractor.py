@@ -38,7 +38,7 @@ CLIENT_ORDER = ("tv_simply", "web_embedded", "default", "android_vr", "web", "tv
 # "fast" is the warm youtubei.js sidecar (ytresolver/): anonymous, ~0.5 s for a whole song.
 # It runs before yt-dlp when JUKES_FAST_RESOLVER_URL is set; any failure falls through.
 FAST_CLIENT = "fast"
-FAST_TIMEOUT_SECONDS = 20.0
+FAST_TIMEOUT_SECONDS = 40.0  # the sidecar itself aborts a stalled stream after 15 s idle
 COOKIELESS_CLIENTS = {"tv_simply", "web_embedded", "android_vr", "ios", FAST_CLIENT}
 FORMAT_SELECTOR = "140[vcodec=none]/bestaudio[ext=m4a][vcodec=none]/bestaudio[vcodec=none]"
 CHUNK_BYTES = 256 * 1024
@@ -132,7 +132,7 @@ def _classify_stderr(text: str) -> str:
     if "429" in lowered or "too many requests" in lowered or "rate limit" in lowered or "rate-limit" in lowered:
         return "rate_limited"
     if any(token in lowered for token in (
-        "private video", "video unavailable", "is not available", "has been removed",
+        "private video", "video unavailable", "video is unavailable", "is not available", "has been removed",
         "account associated", "been terminated", "members-only", "members only",
     )):
         return "video_unavailable"

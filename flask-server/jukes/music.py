@@ -74,6 +74,7 @@ class UserContext:
 
 
 ANONYMOUS = UserContext()
+KEEPALIVE_VIDEO_ID = "dQw4w9WgXcQ"
 
 
 @dataclass(frozen=True)
@@ -241,6 +242,20 @@ class Music:
         self._negative: OrderedDict[tuple, tuple[float, type[MusicError], str]] = OrderedDict()
         self._inflight: dict[tuple, list] = {}  # key -> [lock, waiters]
         self._lock = threading.Lock()
+
+    def start_keepalive(self, interval: float) -> threading.Event:
+        """Keep the anonymous YouTube Music connection warm: a cold one costs ~3.5 s on the first tap."""
+        def loop() -> None:
+            while True:
+                try:
+                    self._client_factory(ANONYMOUS).get_watch_playlist(videoId=KEEPALIVE_VIDEO_ID, limit=1)
+                except Exception:  # noqa: BLE001 - best effort; real requests report their own errors
+                    pass
+                if stop.wait(interval):
+                    return
+        stop = threading.Event()
+        threading.Thread(target=loop, name="jukes-music-keepalive", daemon=True).start()
+        return stop
 
     # -- cache ---------------------------------------------------------
     def _cached(self, key: tuple) -> Track | None:

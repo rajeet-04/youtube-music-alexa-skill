@@ -626,3 +626,8 @@ def test_fast_path_writes_stream_copy_hints_for_progressive_output(sidecar, cach
     key = AudioKey("hinted", "public-m4a-v1")
     extractor.download(key, cache.reserve(key, requested=True), None)
     assert seen == [{"acodec": "mp4a.40.2", "abr": 128, "duration": 3.0}]
+
+
+def test_this_video_is_unavailable_is_terminal():
+    from jukes.extractor import _classify_stderr
+    assert _classify_stderr("ERROR: [youtube] abc: This video is unavailable") == "video_unavailable"
