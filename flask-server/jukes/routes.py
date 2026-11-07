@@ -479,6 +479,11 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
             warm_src[key] = src
             while len(warm_src) > 2000:
                 warm_src.popitem(last=False)
+        wait = request.args.get("wait", type=float)
+        if requested and wait and wait > 0 and job.status in ("queued", "downloading"):
+            # Answer "ready" in this response when the download is quick: saves the client a poll round trip.
+            job = jobs.wait(job.job_id, min(wait, settings.max_job_wait_seconds),
+                            until_streamable=request.args.get("progressive") == "1") or job
         body = {**track.as_dict(), **job_view(job), "personalization_status": ctx.personalization_status}
         response = jsonify(body)
         response.status_code = 200 if job.status == "ready" else 202

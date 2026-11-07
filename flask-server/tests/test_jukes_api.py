@@ -610,3 +610,13 @@ def test_cold_get_audio_is_rate_limited(env):
     codes = [client.get(f"/v1/audio/{v}").status_code for v in ids]
     assert 429 not in codes[:2] and codes[2] == 429  # first two start downloads, third is refused
     assert client.get("/audio/?video_id=aaaaaaaaaa4").status_code == 429  # legacy shares the same bucket
+
+
+def test_prepare_can_wait_and_answer_ready_in_one_round_trip(env):
+    env.extractor.gate = threading.Event()
+    slow = post(env, "/v1/audio/prepare?wait=0.2", {"video_id": VID})
+    assert slow.status_code == 202 and slow.get_json()["status"] in ("queued", "downloading")  # gave up waiting
+    env.extractor.gate.set()
+    fast = post(env, "/v1/audio/prepare?wait=3", {"video_id": VID2})
+    body = fast.get_json()
+    assert fast.status_code == 200 and body["status"] == "ready" and body["audio_url"].endswith(f"/v1/audio/{VID2}")

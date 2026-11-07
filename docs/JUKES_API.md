@@ -65,6 +65,14 @@ chosen track; the backend picks the best match but the app owns the final call.
 
 `GET /v1/jobs/{job_id}` → `{job_id, video_id, status, pool, audio_url?, error?}`.
 
+### Optional wait on prepare
+
+`POST /v1/audio/prepare?wait=<seconds>` holds the request (at most `JUKES_MAX_JOB_WAIT_SECONDS`,
+default 10) until the job is ready or failed, then answers with the same body as a poll would.
+A quick download therefore returns `200 status: ready` with `audio_url` in one round trip instead
+of `202` followed by a poll. If the wait runs out, the answer is the usual `202`. Combine with
+`progressive=1` to return as soon as `stream_url` exists. Without `wait` nothing changes.
+
 ### Optional progressive playback
 
 Existing endpoint paths, request bodies and default responses remain compatible.
