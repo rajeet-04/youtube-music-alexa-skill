@@ -14,7 +14,7 @@ import re
 import threading
 import time
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 log = logging.getLogger(__name__)
@@ -84,6 +84,8 @@ class Track:
     album: str | None = None
     duration_ms: int | None = None
     artwork_url: str | None = None
+    # Exact title and artist, but the length is outside the usual tolerance (music videos carry intros).
+    length_relaxed: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -94,6 +96,7 @@ class Track:
             "album": self.album,
             "duration_ms": self.duration_ms,
             "artwork_url": self.artwork_url,
+            **({"length_relaxed": True} if self.length_relaxed else {}),
         }
 
 
@@ -450,7 +453,7 @@ class Music:
             raise NoMatch("no matching song")
         forms = [title] + ([core] if (core := _core_title(title)) != title else [])
         requested = set(_tokens(title)) | set(_tokens(artist))
-        ranked: list[tuple[float, float, int, Track]] = []
+        ranked: list[tuple[int, float, float, int, Track]] = []
         considered = 0
         for rank, item in enumerate(items):
             track = self._track(item)
@@ -462,19 +465,25 @@ class Music:
             tokens = set(_tokens(track.title)) | set(_tokens(" ".join(track.artists + ((track.album or ""),))))
             if (_MODIFIER_TOKENS & tokens) - requested or (_PROMO_TOKENS & tokens) - requested:
                 continue
-            gap = 0.0
+            # Precision keeps "Enchanted" from resolving to "Enchanted (Taylor's Version)".
+            precision = max(_title_precision(form, track.title, track.artists) for form in forms)
+            gap, loose = 0.0, 0
             if selector.duration_ms and track.duration_ms:
                 gap = abs(track.duration_ms - selector.duration_ms)
                 if gap > duration_tolerance_ms(selector.duration_ms):
-                    continue
+                    # Music videos often carry an intro/outro the studio cut lacks. An exact title and
+                    # artist may still win with a wider gap, but never over an in-tolerance candidate.
+                    exact = title_score >= 1.0 and artist_score >= 0.9 and precision >= 1.0
+                    if not (exact and gap <= max(30_000.0, selector.duration_ms * 0.25)):
+                        continue
+                    loose = 1
             elif strict_artist and selector.duration_ms:
                 continue  # an unlisted-length video cannot be verified
-            # Precision keeps "Enchanted" from resolving to "Enchanted (Taylor's Version)".
-            precision = max(_title_precision(form, track.title, track.artists) for form in forms)
-            ranked.append((-(title_score + artist_score + precision), gap, rank, track))
+            ranked.append((loose, -(title_score + artist_score + precision), gap, rank, track))
         if not ranked:
             if considered:
                 raise RejectedMatch("candidates differ in version or duration")
             raise NoMatch("no matching song")
-        ranked.sort(key=lambda r: r[:3])
-        return ranked[0][3]
+        ranked.sort(key=lambda r: r[:4])
+        best = ranked[0]
+        return replace(best[4], length_relaxed=True) if best[0] else best[4]

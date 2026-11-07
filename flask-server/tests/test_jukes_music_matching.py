@@ -143,3 +143,23 @@ def test_searches_never_use_the_signed_in_client():
     searched = contexts[1:]  # contexts[0] is the resolve-level client, which is only handed to _search
     assert contexts and all(c is ANONYMOUS for c in searched)
     assert yt.filters == ["songs"]
+
+
+def test_exact_title_with_music_video_length_gap_is_accepted_but_flagged():
+    # Spotify lists 2:18; the artist's video is 2:38 (20 s intro). Exact title + artist: the right track.
+    yt = YT(songs=[item("8CbgxW1atzY", "Dil na laga", ["Omar Mukhtar"], "2:23")],
+            videos=[item("UT7lqQYDh2k", "Goray Goray Gaal", ["Omar Mukhtar"], "2:38")])
+    track = resolve(yt, "Goray Goray Gaal", "Omar Mukhtar", 138_000)
+    assert track.video_id == "UT7lqQYDh2k" and track.length_relaxed and track.as_dict()["length_relaxed"] is True
+
+
+def test_in_tolerance_candidate_beats_a_relaxed_exact_one():
+    yt = YT(songs=[item("longlonglon", "Sapne", ["Lashcurry"], "3:45"), item("exactexact1", "Sapne", ["Lashcurry"], "3:17")])
+    track = resolve(yt, "Sapne", "Lashcurry", 197_000)
+    assert track.video_id == "exactexact1" and not track.length_relaxed and "length_relaxed" not in track.as_dict()
+
+
+def test_length_gap_beyond_a_quarter_is_still_rejected():
+    yt = YT(songs=[item("longlonglon", "Sapne", ["Lashcurry"], "6:00")])
+    with pytest.raises(RejectedMatch):
+        resolve(yt, "Sapne", "Lashcurry", 197_000)
