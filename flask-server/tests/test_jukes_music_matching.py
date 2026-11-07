@@ -170,3 +170,46 @@ def test_songs_rejected_for_length_still_try_the_video_upload():
             videos=[item("xQrMELqpf6E", "Main Dhoondne Ko Zamaane Mein", ["Gaurav Dagaonkar"], "4:24")])
     assert resolve(yt, "Main Dhoondne Ko Zamaane Mein", "Gaurav Dagaonkar", 262_000).video_id == "xQrMELqpf6E"
     assert yt.filters == ["songs", "videos"]
+
+
+def test_composer_requested_but_singer_credited_is_accepted_and_flagged():
+    # The app sent the composer ("Salim–Sulaiman"); YouTube Music credits the singer.
+    yt = YT(songs=[item("gLBoyzFnAdE", "Haule Haule", ["Sukhwinder Singh"], "4:24"),
+                   item("57viGjog3EE", "Zara Haule Haule", ["Not Applicable"], "4:37")])
+    track = resolve(yt, "Haule Haule", "Salim–Sulaiman", 265_000)
+    assert track.video_id == "gLBoyzFnAdE" and track.artist_relaxed and track.as_dict()["artist_relaxed"] is True
+
+
+def test_uncredited_artist_is_not_guessed_when_titles_collide_or_length_is_off():
+    songs = [item("aaaaaaaaaaa", "Challa", ["Rabbi"], "5:21"), item("bbbbbbbbbbb", "Challa", ["Shilpa Rao"], "5:22")]
+    with pytest.raises(NoMatch):
+        resolve(YT(songs=songs), "Challa", "A.R. Rahman", 320_000)  # two songs fit: ambiguous
+    with pytest.raises(NoMatch):
+        resolve(YT(songs=songs[:1]), "Challa", "A.R. Rahman", 250_000)  # right title, wrong length
+    with pytest.raises(NoMatch):
+        resolve(YT(songs=songs[:1]), "Challa", "A.R. Rahman")  # no length to verify with
+
+
+def test_artist_named_in_the_video_title_counts_as_credit():
+    video = item("vvvvvvvvvvv", "Challa | Full Song | Jab Tak Hai Jaan | Rabbi | A. R. Rahman | Gulzar", ["Yash Raj Films"], "5:20")
+    assert resolve(YT(videos=[video]), "Challa", "A.R. Rahman", 320_000).video_id == "vvvvvvvvvvv"
+
+
+def test_official_song_beats_a_fan_upload_that_names_the_artist():
+    songs = [item("sssssssssss", "Challa", ["Rabbi"], "5:21")]
+    video = item("vvvvvvvvvvv", "Challa Song | A.R Rahman | Jab Tak Hain Jaan", ["Fan Channel"], "5:31")
+    track = resolve(YT(songs=songs, videos=[video]), "Challa", "A.R. Rahman", 320_000)
+    assert track.video_id == "sssssssssss" and track.artist_relaxed
+
+
+def test_rejected_video_does_not_stop_the_uncredited_artist_tier():
+    songs = [item("gLBoyzFnAdE", "Haule Haule", ["Sukhwinder Singh"], "4:24")]
+    videos = [item("xxxxxxxxxxx", "Haule Haule", ["Salim-Sulaiman"], "9:00")]  # credited but far too long
+    assert resolve(YT(songs=songs, videos=videos), "Haule Haule", "Salim–Sulaiman", 265_000).video_id == "gLBoyzFnAdE"
+
+
+def test_uncredited_artist_picks_the_recording_whose_length_is_clearly_closest():
+    songs = [item("aaaaaaaaaaa", "Haule Haule", ["Sukhwinder Singh"], "4:24"), item("bbbbbbbbbbb", "Haule Haule", ["Ar Ishu"], "4:15")]
+    assert resolve(YT(songs=songs), "Haule Haule", "Salim–Sulaiman", 265_000).video_id == "aaaaaaaaaaa"
+    with pytest.raises(NoMatch):  # 4:24 vs 4:15 around 4:20: neither is clearly the one
+        resolve(YT(songs=songs), "Haule Haule", "Salim–Sulaiman", 260_000)

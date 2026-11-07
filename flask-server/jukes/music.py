@@ -87,6 +87,9 @@ class Track:
     artwork_url: str | None = None
     # Exact title and artist, but the length is outside the usual tolerance (music videos carry intros).
     length_relaxed: bool = False
+    # Exact title and length, but the credited artists differ from the request (often a composer
+    # was requested and the singer is credited). The app should verify before trusting it.
+    artist_relaxed: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -98,6 +101,7 @@ class Track:
             "duration_ms": self.duration_ms,
             "artwork_url": self.artwork_url,
             **({"length_relaxed": True} if self.length_relaxed else {}),
+            **({"artist_relaxed": True} if self.artist_relaxed else {}),
         }
 
 
@@ -455,18 +459,35 @@ class Music:
     def _by_title(self, client: Any, selector: TrackSelector) -> Track:
         title, artist = selector.title or "", selector.artist or ""
         query = f"{_core_title(title)} {artist}".strip()
+        songs = self._search(client, query)
+        miss: MusicError
         try:
-            return self._pick(self._search(client, query), selector, strict_artist=False)
-        except (NoMatch, RejectedMatch) as songs_miss:
-            # Some releases (e.g. artist-channel uploads) are YouTube videos, not "songs", so the
-            # songs filter never lists them. Same checks, but the artist must then be credited.
-            try:
-                return self._pick(self._search(client, query, "videos"), selector, strict_artist=True)
-            except NoMatch:
-                # Keep the more informative miss: songs existed but were the wrong version.
-                raise songs_miss from None
+            return self._pick(songs, selector, strict_artist=False)
+        except (NoMatch, RejectedMatch) as error:
+            miss = error  # the more informative miss: songs existed but were the wrong version
+        # Some releases (e.g. artist-channel uploads) are YouTube videos, not "songs", so the
+        # songs filter never lists them. Same checks, but the artist must then be credited.
+        videos = self._search(client, query, "videos")
+        try:
+            return self._pick(videos, selector, strict_artist=True)
+        except NoMatch:
+            pass
+        except RejectedMatch as error:
+            miss = error
+        # The requested artist is not credited (a composer was requested, the singer is credited):
+        # accept only an exact title with an in-tolerance length that no other song shares.
+        try:
+            return self._pick(songs, selector, strict_artist=False, any_artist=True)
+        except NoMatch:
+            pass
+        # Last: an upload that names the artist in its title instead of crediting it.
+        try:
+            return self._pick(videos, selector, strict_artist=True, title_credit=True)
+        except (NoMatch, RejectedMatch):
+            raise miss from None
 
-    def _pick(self, items: list[dict[str, Any]], selector: TrackSelector, *, strict_artist: bool) -> Track:
+    def _pick(self, items: list[dict[str, Any]], selector: TrackSelector, *, strict_artist: bool,
+              any_artist: bool = False, title_credit: bool = False) -> Track:
         title, artist = selector.title or "", selector.artist or ""
         if not items:
             raise NoMatch("no matching song")
@@ -478,7 +499,12 @@ class Music:
             track = self._track(item)
             title_score = max(_score(form, track.title) for form in forms)
             artist_score = _artist_score(artist, track.artists) if artist else 1.0
-            if title_score < 0.8 or artist_score < (0.9 if strict_artist else 0.6):
+            if title_credit and artist and artist_score < 0.9:
+                artist_score = max(artist_score, _score(artist, track.title))
+            if any_artist:
+                if title_score < 1.0 or not selector.duration_ms:
+                    continue
+            elif title_score < 0.8 or artist_score < (0.9 if strict_artist else 0.6):
                 continue  # a different song entirely: no match, not a rejection
             considered += 1
             tokens = set(_tokens(track.title)) | set(_tokens(" ".join(track.artists + ((track.album or ""),))))
@@ -486,6 +512,8 @@ class Music:
                 continue
             # Precision keeps "Enchanted" from resolving to "Enchanted (Taylor's Version)".
             precision = max(_title_precision(form, track.title, track.artists) for form in forms)
+            if any_artist and precision < 1.0:
+                continue
             gap, loose = 0.0, 0
             if selector.duration_ms and track.duration_ms:
                 gap = abs(track.duration_ms - selector.duration_ms)
@@ -493,12 +521,19 @@ class Music:
                     # Music videos often carry an intro/outro the studio cut lacks. An exact title and
                     # artist may still win with a wider gap, but never over an in-tolerance candidate.
                     exact = title_score >= 1.0 and artist_score >= 0.9 and precision >= 1.0
-                    if not (exact and gap <= max(30_000.0, selector.duration_ms * 0.25)):
+                    if any_artist or not (exact and gap <= max(30_000.0, selector.duration_ms * 0.25)):
                         continue
                     loose = 1
-            elif strict_artist and selector.duration_ms:
+            elif (strict_artist or any_artist) and selector.duration_ms:
                 continue  # an unlisted-length video cannot be verified
             ranked.append((loose, -(title_score + artist_score + precision), gap, rank, track))
+        if any_artist:
+            ranked.sort(key=lambda r: r[2])  # nearest length first
+            # Several songs sharing the title only resolve when one is clearly the same recording
+            # (within 3 s) and the next is 5 s or more further away; otherwise do not guess.
+            if not ranked or (len(ranked) > 1 and not (ranked[0][2] <= 3_000 and ranked[1][2] - ranked[0][2] >= 5_000)):
+                raise NoMatch("no matching song")
+            return replace(ranked[0][4], artist_relaxed=True)
         if not ranked:
             if considered:
                 raise RejectedMatch("candidates differ in version or duration")
