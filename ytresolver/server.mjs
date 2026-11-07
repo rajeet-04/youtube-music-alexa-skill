@@ -12,6 +12,8 @@ Platform.shim.eval = async data => vm.runInNewContext(
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 4417);
 const MAX_ACTIVE = Number(process.env.YTRESOLVER_MAX_ACTIVE || 6);
+const PARALLEL = Number(process.env.YTRESOLVER_PARALLEL || 2);
+const CHUNK_BYTES = Number(process.env.YTRESOLVER_CHUNK_BYTES || 10 * 1024 * 1024);
 const WARM_ID = 'dQw4w9WgXcQ';
 
 const resolver = createResolver({
@@ -61,7 +63,7 @@ async function audio(req, res, video) {
     // Resolve separately first so the log separates /player time from transfer time.
     await resolver.resolve(video);
     entry.resolve_ms = Math.round(performance.now() - t0);
-    const result = await relay(req, res, video, { resolver,
+    const result = await relay(req, res, video, { resolver, parallel: PARALLEL, chunkBytes: CHUNK_BYTES,
       onFirstByte: () => { entry.first_byte_ms = Math.round(performance.now() - t0); } });
     Object.assign(entry, { ok: true, bytes: result.bytes, refreshed: result.refreshed });
     totals.ok++;
