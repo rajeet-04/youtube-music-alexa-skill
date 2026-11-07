@@ -37,3 +37,5 @@ Earlier pilots remain alongside the final rows for audit. They include upstream 
 - No Android compilation or testing is part of the final workflow; app checkout is unchanged. Client integration requirements are documented in [the API](../../JUKES_API.md) and [testing/handoff guide](../../PROGRESSIVE_BACKEND_TESTING.md).
 
 At the conclusion of this first experiment, production remained on image `sha256:22597981473751aafe5f4cc12fa46c225cb8e11c2420c5d9dbcd060ab936e911`. The r3 pair has been superseded by the follow-up optimization tests. See [the later results](../2026-10-07-optimization/REPORT.md) for current status. Before rollout, gather a larger matched live cohort with reliable upstream access and demonstrate improved first-audio latency without completed-file or reliability regressions.
+
+> The raw result JSON files were removed from the tree; they are in git history before this commit.

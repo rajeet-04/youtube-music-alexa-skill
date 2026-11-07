@@ -3,6 +3,9 @@ services:
     build: ./flask-server
     container_name: ytmusic
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "3"}
     # Gluetun is managed outside this Compose project. Keep both app and browser
     # in the selected VPN namespace so a VPN disconnect is handled by its
     # kill-switch instead of silently falling back to direct egress.
@@ -56,6 +59,9 @@ services:
     build: ./browser-auth
     container_name: youtube-browser
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "3"}
     network_mode: "container:${VPN_CONTAINER_NAME:-gluetun}"
     environment:
       YT_BROWSER_CONTROL_TOKEN: ${YT_BROWSER_CONTROL_TOKEN:?set YT_BROWSER_CONTROL_TOKEN in private .env}
@@ -68,9 +74,12 @@ services:
     shm_size: 512mb
 
   caddy:
-    image: caddy:2
+    image: caddy:2.11.9
     container_name: caddy
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "3"}
     environment:
       SITE_ADDRESS: ${SITE_ADDRESS:-localhost}
       GLUETUN_ALIAS: ${GLUETUN_ALIAS:-gluetun}

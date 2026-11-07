@@ -94,7 +94,7 @@ class Store:
                     video_id TEXT NOT NULL,
                     policy TEXT NOT NULL,
                     requested INTEGER NOT NULL CHECK (requested IN (0, 1)),
-                    status TEXT NOT NULL CHECK (status IN ('queued', 'downloading', 'ready', 'failed')),
+                    status TEXT NOT NULL CHECK (status IN ('queued', 'downloading', 'ready', 'failed', 'evicted')),
                     error_code TEXT,
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL,

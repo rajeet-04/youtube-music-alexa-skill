@@ -6,7 +6,7 @@ COPY --from=uv-bin /uv /uvx /usr/local/bin/
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl unzip ffmpeg \
-    && curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh \
+    && curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh -s v2.9.8 \
     && apt-get purge -y curl unzip \
     && rm -rf /var/lib/apt/lists/*
 
