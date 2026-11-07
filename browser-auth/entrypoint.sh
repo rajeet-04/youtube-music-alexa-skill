@@ -30,7 +30,7 @@ openbox >/tmp/openbox.log 2>&1 &
 # frame and the signed-in browser appears to never have opened. Disable Damage
 # and fall back to timed full-frame polling so the viewer always sees the live
 # Chromium window. -wait=20ms poll, -deferupdate=10ms cuts encoder overhead.
-x11vnc -display "${DISPLAY:-:99}" -forever -shared -nopw -localhost -rfbport 5900 \
+x11vnc -display "${DISPLAY:-:99}" -forever -shared -nopw -localhost -rfbport 5900 -noipv6 -threads \
   -noxdamage -wait 20 -deferupdate 10 -o /tmp/x11vnc.log >/dev/null 2>&1 &
 websockify --web=/usr/share/novnc/ "${NOVNC_PORT:-6080}" localhost:5900 >/tmp/novnc.log 2>&1 &
 
