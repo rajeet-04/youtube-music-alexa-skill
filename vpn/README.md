@@ -34,5 +34,12 @@ the `gluetun` container changes the exit.
 scripts/prepare-vpn.sh      # resolves the Endpoint hostname to an IP (Gluetun requires an IP)
 ```
 
+The Surfshark hostname rotates over many servers and only some of them answer a given key, so the
+script sends a real WireGuard handshake (`scripts/wg_probe.py`, run inside the app image) to every
+address and pins the fastest one that answers. If Docker or the image is missing it falls back to the
+first DNS answer (set `PREPARE_VPN_PROBE=0` to force that). When Gluetun is already running, the
+current server is skipped so the live tunnel is not disturbed. Note: Surfshark's "India" servers
+measured 160-175 ms from Malaysia and geolocate to Europe in some databases (virtual locations).
+
 Re-run it after changing `VPN_PROFILE` or if the connection stops working (server IPs can change),
 then `docker compose ... up -d --force-recreate gluetun`.

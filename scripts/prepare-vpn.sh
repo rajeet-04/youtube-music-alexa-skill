@@ -22,6 +22,26 @@ if [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     ip="$host"
 else
     ip=$(getent ahostsv4 "$host" | awk 'NR==1{print $1}')
+    # The hostname rotates over many servers and only some accept our key, so the first DNS answer
+    # is often dead. Prefer an address that answers a real WireGuard handshake (fastest first).
+    # Skipped silently when Docker or the image is unavailable. Re-running while Gluetun is up
+    # skips its current server, so the live tunnel is never poked.
+    image="${JUKES_IMAGE:-youtube-music-alexa-skill-ytmusic}"
+    if [ "${PREPARE_VPN_PROBE:-1}" = 1 ] && command -v docker >/dev/null 2>&1 \
+        && docker image inspect "$image" >/dev/null 2>&1; then
+        skip=()
+        if [ -f vpn/.generated/wg0.conf ] && docker ps --format '{{.Names}}' | grep -qx "${VPN_CONTAINER_NAME:-gluetun}"; then
+            live=$(sed -nE 's/^[[:space:]]*Endpoint[[:space:]]*=[[:space:]]*([0-9.]+):.*/\1/p' vpn/.generated/wg0.conf | head -1)
+            [ -n "$live" ] && skip=(--skip "$live")
+        fi
+        if best=$(docker run --rm --network host --entrypoint python \
+            -v "$PWD/scripts/wg_probe.py:/wg_probe.py:ro" -v "$PWD/$src:/wg.conf:ro" \
+            "$image" /wg_probe.py /wg.conf "${skip[@]}" 2>&1 >/dev/stdout | tee /dev/stderr | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1) && [ -n "$best" ]; then
+            ip="$best"
+        else
+            echo "prepare-vpn: no address answered the handshake probe; using first DNS answer" >&2
+        fi
+    fi
 fi
 [ -n "$ip" ] || { echo "prepare-vpn: could not resolve $host" >&2; exit 75; }
 mkdir -p vpn/.generated
