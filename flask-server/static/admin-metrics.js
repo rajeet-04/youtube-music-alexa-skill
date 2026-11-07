@@ -44,6 +44,7 @@
     container.replaceChildren();
     container.append(element('p','Backend '+current.health+' · Metrics collected since '+new Date(m.started_at*1000).toLocaleString()+
       ' · Window coverage '+Math.round(w.coverage_seconds/60)+' min. Counters have 60-second resolution.','muted'));
+    const short=v=>number(v)?v.toFixed(2)+' s':'n/a';
     const tone=(v,warn,bad)=>!number(v)?'':v>=bad?'bad':v>=warn?'warn':'good';
     const kpis=element('div',undefined,'vitals');container.append(kpis);
     function kpi(label,value,cls){const k=element('div',undefined,'vital '+(cls||''));k.append(element('span',label),element('b',value));kpis.append(k);}
@@ -73,14 +74,14 @@
       ['Successful preparations',selected('prepare_success')],['Failed preparations',selected('prepare_failed')],
       ['Average preparation',formatSeconds(w.latency.all.average_seconds)],
       ['P50 preparation',formatSeconds(w.latency.all.p50_seconds)],['P95 preparation',formatSeconds(w.latency.all.p95_seconds)],
-      ['P99 preparation',formatSeconds(w.latency.all.p99_seconds)],['Failure rate',formatPercent(w.failure_rate)],
+      ['P99 preparation',number(w.latency.all.p99_seconds)?formatSeconds(w.latency.all.p99_seconds):'needs 100 samples'],['Failure rate',formatPercent(w.failure_rate)],
       ['Temporary failures',selected('temporary_failure')],['Terminal failures',selected('terminal_failure')],
       ['Retries',count(retries(c))],['Fallback / recovery retries',count(c.retry_fallback||0)+' / '+count(c.retry_recovery||0)],['Admission rejections',selected('admission_rejected')],
       ['Expired / evicted / missing results',count((c.eviction||0)+(c.warmup_expiration||0)+(c.missing_result||0))]
     ],'Successful preparation samples: '+w.latency.all.sample_count+(w.latency.all.sampled?' (sampled)':'')+
       '. P99 needs 100 samples. '+m.retry_coverage+'. Lifetime preparations: '+lifetime('prepare_success')+' successful / '+lifetime('prepare_failed')+' failed.');
     panel('Preparation latency by path · selected window',[
-      ...['cached','warmed','promoted','joined','cold','recovered'].map(key=>[key+' P50 / P95',formatSeconds(w.latency[key].p50_seconds)+' / '+formatSeconds(w.latency[key].p95_seconds)+' ('+w.latency[key].sample_count+' samples'+(w.latency[key].sampled?', sampled':'')+')']),
+      ...['cached','warmed','promoted','joined','cold','recovered'].map(key=>[key+' P50 / P95',short(w.latency[key].p50_seconds)+' / '+short(w.latency[key].p95_seconds)+' · n='+w.latency[key].sample_count+(w.latency[key].sampled?'*':'')]),
       ['Queue wait P95',formatSeconds(w.latency.queue.p95_seconds)],['Extraction + validation P95',formatSeconds(w.latency.extraction.p95_seconds)],
       ['Dropped latency observations',selected('latency_dropped')],['Interrupted outcome unknown',selected('prepare_outcome_unknown')]
     ],'Promoted = speculative in-flight work; joined = other in-flight work. Cold includes metadata lookup and queue wait. Recovered latency includes downtime; path differences do not prove causal savings.');
