@@ -84,8 +84,16 @@ async function audio(req, res, video) {
   }
 }
 
+// Warms the resolver's URL cache (~5 min) so the tap that follows skips the ~1.5 s resolve.
+async function prewarm(res, video) {
+  try { await resolver.resolve(video); json(res, 200, { ok: true }); }
+  catch (error) { json(res, HTTP_STATUS[error.code] || 502, { error: error.code || 'resolve_failed' }); }
+}
+
 const server = http.createServer((req, res) => {
   const { pathname } = new URL(req.url, 'http://local');
+  const warm = /^\/resolve\/([^/]+)$/.exec(pathname);
+  if (req.method === 'POST' && warm) return void prewarm(res, warm[1]);
   const match = /^\/audio\/([^/]+)$/.exec(pathname);
   if (req.method === 'GET' && match) return void audio(req, res, match[1]);
   if (req.method === 'GET' && pathname === '/health') return json(res, ready ? 200 : 503, { ready });

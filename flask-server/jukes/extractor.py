@@ -280,6 +280,20 @@ class Extractor:
         self.on_fast_fallback = None
         self.streams = None
 
+    def prewarm(self, video_id: str) -> None:
+        """Fire-and-forget: let the sidecar resolve now so the tap that follows skips ~1.5 s."""
+        if not self.fast_resolver_url or self._closing:
+            return
+        url = f"{self.fast_resolver_url.rstrip('/')}/resolve/{video_id}"
+
+        def call() -> None:
+            try:  # shortcut: one short thread per call, fine at warmup rates; use a pool if it grows
+                _FastSource._opener.open(urllib.request.Request(url, method="POST"), timeout=10).close()
+            except (OSError, ValueError):
+                pass  # warming is best effort; the real download resolves on its own
+
+        threading.Thread(target=call, daemon=True).start()
+
     # -- shared failure state ------------------------------------------
     def cooldown_remaining(self) -> float:
         with self._lock:

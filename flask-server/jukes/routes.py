@@ -457,6 +457,9 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
         if not requested and request.args.get('resolve_only') == '1':
             # Cheap tier: match + metadata are cached for the tap that follows; no download.
             metrics.record('warmup_resolve')
+            prewarm = getattr(jobs.extractor, 'prewarm', None)
+            if prewarm and cache.lookup(AudioKey(track.video_id, AUDIO_POLICY)) is None:
+                prewarm(track.video_id)
             wlog.info('warm outcome=resolved src=%s video=%s title=%r', request.args.get('source', '-'), track.video_id, track.title)
             return jsonify({**track.as_dict(), "job_id": "", "status": "resolved"})
         key = AudioKey(track.video_id, AUDIO_POLICY)

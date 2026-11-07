@@ -568,6 +568,18 @@ def test_resolve_only_warmup_downloads_nothing(env):
     assert m['lifetime']['warmup_resolve'] == 1 and m['lifetime'].get('warmup_request', 0) == 0
 
 
+def test_resolve_only_warmup_prewarms_resolver_unless_cached(env):
+    env.extractor.prewarmed = []
+    env.extractor.prewarm = env.extractor.prewarmed.append
+    env.yt.items = [song(VID, "Song Name", "Some Artist", 200)]
+    body = {"title": "Song Name", "artist": "Some Artist", "duration_ms": 200_000}
+    post(env, "/v1/warmup?resolve_only=1", body)
+    assert env.extractor.prewarmed == [VID]
+    wait_ready(env, post(env, "/v1/audio/prepare", {"video_id": VID}).get_json()["job_id"])
+    post(env, "/v1/warmup?resolve_only=1", body)
+    assert env.extractor.prewarmed == [VID]  # already downloaded: nothing to warm
+
+
 def test_warmup_source_counts_start_and_first_use(env):
     first = post(env, '/v1/warmup?source=queue', {'video_id': VID})
     post(env, '/v1/warmup?source=queue', {'video_id': VID})  # duplicate: not counted again
