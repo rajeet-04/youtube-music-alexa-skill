@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import logging.handlers
 import os
 from collections import OrderedDict
 import re
@@ -266,6 +268,19 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
 
     metrics = cache.metrics
     warm_src: 'OrderedDict[AudioKey, str]' = OrderedDict()  # warmups awaiting a first use, by source
+    # Warmup behaviour log: stdout (docker logs) plus /data/warmup.log (1 MB x 4, survives restarts).
+    wlog = logging.getLogger('jukes.warmup')
+    if not wlog.handlers:
+        wlog.setLevel(logging.INFO); wlog.propagate = False
+        fmt = logging.Formatter('%(asctime)s %(message)s')
+        handlers = [logging.StreamHandler()]
+        try:
+            handlers.append(logging.handlers.RotatingFileHandler(
+                settings.database_path.parent / 'warmup.log', maxBytes=1_000_000, backupCount=3))
+        except (OSError, AttributeError):  # no/read-only data dir (tests): stdout only
+            pass
+        for h in handlers:
+            h.setFormatter(fmt); wlog.addHandler(h)
 
     def preparation_path(key):
         entry = cache.lookup(key)
@@ -276,8 +291,10 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
     def observed_submit(key, started_at, admitted=None):
         observation = metrics.begin_preparation(started_at)
         entry, joined, category = admitted[1] if admitted else preparation_path(key)
-        if category in ('warmed', 'promoted') and (src := warm_src.pop(key, None)):
+        src = warm_src.pop(key, None) if category in ('warmed', 'promoted') else None
+        if src:
             metrics.record('warmup_used_' + src)
+        wlog.info('prepare path=%s video=%s warmed_by=%s', category, key.video_id, src or '-')
         try:
             job = jobs.get(admitted[0].job_id) or admitted[0] if admitted else submit(key, True)
         except ApiError:
@@ -438,6 +455,7 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
         if not requested and request.args.get('resolve_only') == '1':
             # Cheap tier: match + metadata are cached for the tap that follows; no download.
             metrics.record('warmup_resolve')
+            wlog.info('warm outcome=resolved src=%s video=%s title=%r', request.args.get('source', '-'), track.video_id, track.title)
             return jsonify({**track.as_dict(), "job_id": "", "status": "resolved"})
         key = AudioKey(track.video_id, AUDIO_POLICY)
         if request.args.get('progressive')=='1' and streams: streams.request(key)
@@ -448,6 +466,9 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
             else:
                 throttle("warmup", settings.warmup_per_minute)
         job = observed_submit(key, started_at, admitted) if requested else submit(key, False)
+        if not requested:
+            wlog.info('warm outcome=%s src=%s video=%s title=%r', 'started' if fresh else
+                      ('cached' if job.status == 'ready' else 'duplicate'), request.args.get('source', '-'), track.video_id, track.title)
         if fresh and not requested and (src := request.args.get('source')) in WARM_SOURCES:
             metrics.record('warmup_src_' + src)
             warm_src[key] = src
