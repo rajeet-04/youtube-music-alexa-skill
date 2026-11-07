@@ -1,0 +1,7 @@
+services:
+  ytmusic:
+    environment:
+      JUKES_FAST_RESOLVER_URL: http://127.0.0.1:4417
+      JUKES_EXTRACTOR_FORKSERVER: "1"
+      JUKES_PREPARE_OVERLAP: "1"
+      JUKES_PROGRESSIVE: "1"
