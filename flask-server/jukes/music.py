@@ -396,6 +396,9 @@ class Music:
         return self._track(item)
 
     def _search(self, client: Any, query: str, filter: str = "songs") -> list[dict[str, Any]]:
+        # Never search with the signed-in client: authenticated searches are written to the
+        # account's YouTube Music search history. Only radio uses the personalised client.
+        client = self._client_factory(ANONYMOUS)
         try:
             results = client.search(query, filter=filter, limit=8, ignore_spelling=True)
         except Exception as error:  # noqa: BLE001

@@ -11,7 +11,7 @@ SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(SERVER_DIR))
 
-from jukes.music import Music, NoMatch, RejectedMatch, TrackSelector  # noqa: E402
+from jukes.music import ANONYMOUS, Music, NoMatch, RejectedMatch, TrackSelector, UserContext  # noqa: E402
 
 
 def item(video_id, title, artists, duration):
@@ -127,3 +127,19 @@ def test_a_requested_live_version_is_not_stripped():
                    item("bbbbbbbbbbb", "Song (Live)", ["Main Artist"], "4:10")])
     assert resolve(yt, "Song (Live)", "Main Artist").video_id == "bbbbbbbbbbb"
     assert resolve(yt, "Song", "Main Artist").video_id == "aaaaaaaaaaa"
+
+
+def test_searches_never_use_the_signed_in_client():
+    """Authenticated searches land in the account's YouTube Music history."""
+    yt = YT(songs=[item("32gV5MWWzzs", "Sapne", ["Lashcurry"], "3:17")])
+    contexts = []
+
+    def factory(ctx):
+        contexts.append(ctx)
+        return yt
+
+    user = UserContext(installation_id="inst-1", generation=1, personalization_status="connected")
+    Music(factory).resolve(TrackSelector(title="Sapne", artist="Lashcurry"), user)
+    searched = contexts[1:]  # contexts[0] is the resolve-level client, which is only handed to _search
+    assert contexts and all(c is ANONYMOUS for c in searched)
+    assert yt.filters == ["songs"]
