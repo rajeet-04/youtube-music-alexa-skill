@@ -10,6 +10,7 @@ from collections import OrderedDict
 import re
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
@@ -276,7 +277,7 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
         handlers = [logging.StreamHandler()]
         try:
             handlers.append(logging.handlers.RotatingFileHandler(
-                settings.database_path.parent / 'warmup.log', maxBytes=1_000_000, backupCount=3))
+                Path(os.environ.get('JUKES_DB_PATH') or '/data/jukes.sqlite3').parent / 'warmup.log', maxBytes=1_000_000, backupCount=3))
         except (OSError, AttributeError):  # no/read-only data dir (tests): stdout only
             pass
         for h in handlers:
