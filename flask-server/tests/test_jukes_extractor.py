@@ -631,3 +631,11 @@ def test_fast_path_writes_stream_copy_hints_for_progressive_output(sidecar, cach
 def test_this_video_is_unavailable_is_terminal():
     from jukes.extractor import _classify_stderr
     assert _classify_stderr("ERROR: [youtube] abc: This video is unavailable") == "video_unavailable"
+
+
+@pytest.mark.parametrize("payload", [b"null", b"[]", b"", b"not json"])
+def test_public_probe_is_inconclusive_when_yt_dlp_cannot_read_the_video(payload):
+    # Age-restricted videos make yt-dlp print `null`; that used to crash the whole download.
+    extractor = Extractor(process_factory=lambda args, **kw: FakeProcess(args, payload=payload), media_probe=lambda path: {})
+    assert extractor._probe_public_audio(AudioKey("agerestrict", "p"), 5) is True
+

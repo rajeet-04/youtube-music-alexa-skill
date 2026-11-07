@@ -379,6 +379,8 @@ class Extractor:
             info = json.loads(raw or b"{}")
         except ValueError:
             return True  # inconclusive; extraction itself decides
+        if not isinstance(info, dict):
+            return True  # yt-dlp prints `null` when it cannot read the video (e.g. age-restricted)
         availability = info.get("availability")
         return not (info.get("is_private") or availability in {
             "private", "needs_auth", "premium_only", "subscriber_only"})
