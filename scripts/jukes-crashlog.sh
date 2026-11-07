@@ -20,7 +20,6 @@ while read -r name code; do
   {
     echo "== $name exit=$code at $(date -Is)"
     uptime; free -m
-    echo "throttled: $(vcgencmd get_throttled 2>&1) temp: $(vcgencmd measure_temp 2>&1)"
     echo "== state"; docker inspect "$name" --format '{{json .State}} restarts={{.RestartCount}}' 2>&1
     echo "== container log (last 300 lines)"; docker logs --tail 300 "$name" 2>&1
     echo "== dmesg (last 60)"; dmesg -T 2>&1 | tail -60

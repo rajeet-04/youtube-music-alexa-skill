@@ -1,0 +1,13 @@
+[Unit]
+Description=JUKES serving stack (VPN, backend, resolver, tunnel)
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/azureuser/youtube-music-alexa-skill/scripts/start-stack.sh
+TimeoutStartSec=400
+
+[Install]
+WantedBy=multi-user.target
