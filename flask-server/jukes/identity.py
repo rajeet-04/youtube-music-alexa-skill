@@ -76,6 +76,12 @@ class Identity:
         installation_id = uuid.uuid4().hex
         digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
         with self.store.transaction() as connection:
+            # Tokens that are never presented again would otherwise never expire.
+            connection.execute(
+                "DELETE FROM jukes_installations WHERE last_seen_at < ? - CASE credential_connected "
+                "WHEN 1 THEN ? ELSE ? END",
+                (now, CONNECTED_IDLE_SECONDS, TOKEN_ONLY_IDLE_SECONDS),
+            )
             connection.execute(
                 """
                 INSERT INTO jukes_installations (
@@ -108,11 +114,12 @@ class Identity:
                         (row["installation_id"],),
                     )
                 else:
-                    connection.execute(
-                        "UPDATE jukes_installations SET last_seen_at = ? "
-                        "WHERE installation_id = ?",
-                        (now, row["installation_id"]),
-                    )
+                    if now - float(row["last_seen_at"]) > 3600:  # TTLs are days; skip a write per request
+                        connection.execute(
+                            "UPDATE jukes_installations SET last_seen_at = ? "
+                            "WHERE installation_id = ?",
+                            (now, row["installation_id"]),
+                        )
                     installation = Installation(
                         installation_id=str(row["installation_id"]),
                         created_at=float(row["created_at"]),

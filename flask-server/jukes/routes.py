@@ -52,10 +52,6 @@ MUSIC_STATUS = {"no_match": 404, "match_rejected": 422, "upstream_error": 502}
 RETRY_AFTER = "3"
 
 
-class InvalidToken(Exception):
-    pass
-
-
 class ApiError(Exception):
     def __init__(self, status: int, code: str, message: str, retryable: bool = False, retry_after: str | None = None):
         super().__init__(message)
@@ -315,6 +311,11 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
         metrics.attach_preparation(observation,job.job_id,category)
         return job
 
+    def throttle_cold(key):
+        """Cold downloads started by GET /audio endpoints share the prepare limit."""
+        if cache.lookup(key) is None and not jobs.has_active(key):
+            throttle("requested", settings.requested_per_minute)
+
     def consume_ready(key):
         row = cache.store.get_audio(key)
         if row:
@@ -516,6 +517,7 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
         if response is not None:
             consume_ready(key)
             return response
+        throttle_cold(key)
         job = observed_submit(key, time.time())
         if job.status == "ready":  # published between the lookup and submit
             if (response := serve(key, touch=True)) is not None:
@@ -605,6 +607,7 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
     # -- legacy /audio/ ------------------------------------------------
     @app.route("/audio/", methods=["GET", "HEAD"])
     def legacy_audio():
+        throttle("http", settings.http_per_minute)
         started_at = time.time()
         args = request.args
         meta: Track | None = None
@@ -651,6 +654,7 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
         if response is not None:
             consume_ready(key)
             return response
+        throttle_cold(key)
         job = observed_submit(key, started_at)
         job = jobs.wait(job.job_id, settings.legacy_wait_seconds) or job
         if job.status == "ready":

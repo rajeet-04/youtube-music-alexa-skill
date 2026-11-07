@@ -577,3 +577,12 @@ def test_warmup_source_counts_start_and_first_use(env):
     m = env.app.extensions['jukes_metrics'].snapshot()['lifetime']
     assert m['warmup_src_queue'] == 1 and m['warmup_used_queue'] == 1
     assert not any(k.endswith('bogus') for k in m)
+
+
+def test_cold_get_audio_is_rate_limited(env):
+    app = create_app(Settings(requested_per_minute=2), env.app.extensions["jukes"])
+    client = app.test_client()
+    ids = ["aaaaaaaaaa1", "aaaaaaaaaa2", "aaaaaaaaaa3"]
+    codes = [client.get(f"/v1/audio/{v}").status_code for v in ids]
+    assert 429 not in codes[:2] and codes[2] == 429  # first two start downloads, third is refused
+    assert client.get("/audio/?video_id=aaaaaaaaaa4").status_code == 429  # legacy shares the same bucket

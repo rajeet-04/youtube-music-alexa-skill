@@ -302,8 +302,6 @@ class Jobs:
         with self._cond:
             counts = {"queued": 0, "downloading": 0, "ready": 0, "failed": 0, "evicted": 0}
             errors: dict[str, int] = {}
-            for job_id in list(self._jobs):
-                self._refresh(job_id)
             for job in self._jobs.values():
                 counts[job.status] = counts.get(job.status, 0) + 1
                 if job.status == "failed" and job.error_code:

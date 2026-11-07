@@ -359,7 +359,7 @@ def make_admin(config: AdminConfig, services, cookies: ServerCookies | None,
                                "VALUES (?, ?, ?, ?)", (lease_id, session["sid"], now, now + config.lease_ttl))
         return jsonify({"lease_expires_at": now + config.lease_ttl, "login_path": "/youtube-login/vnc.html"})
 
-    def close_leases(sid: str | None = None) -> None:
+    def close_leases() -> None:
         with store.transaction() as connection:
             connection.execute("UPDATE jukes_browser_leases SET closed_at = ? WHERE closed_at IS NULL", (clock(),))
 
