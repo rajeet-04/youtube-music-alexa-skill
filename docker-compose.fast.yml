@@ -5,3 +5,23 @@ services:
       JUKES_EXTRACTOR_FORKSERVER: "1"
       JUKES_PREPARE_OVERLAP: "1"
       JUKES_PROGRESSIVE: "1"
+
+  # Warm resolver. Same network namespace as gluetun by service name, so recreating gluetun
+  # recreates it too (a container: reference to the old namespace would leave it offline).
+  ytresolver:
+    build: ./ytresolver
+    image: jukes-ytresolver:latest
+    container_name: ytresolver
+    restart: unless-stopped
+    network_mode: "service:gluetun"
+    environment:
+      BGUTIL_URL: http://127.0.0.1:4416
+      YTRESOLVER_MAX_ACTIVE: "10"  # above JUKES_WORKERS (8), or the extra downloads fall back to slow yt-dlp
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 320m
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "3"}

@@ -7,17 +7,15 @@ any VM. Do not use 1 GB: the services use about 740 MiB idle and Chromium needs 
 
     docker-compose.yml               base: ytmusic, youtube-browser, caddy
     docker-compose.tunnel-named.yml  cloudflared (needs CLOUDFLARE_TUNNEL_TOKEN in .env)
-    docker-compose.fast.yml          warm ytresolver sidecar + fork server + progressive audio
+    docker-compose.fast.yml          warm ytresolver sidecar (same network as gluetun) + fork server + progressive audio
     docker-compose.novpn.yml         no VPN: a stand-in "gluetun" container holds the shared network
                                      namespace (use docker-compose.vpn.yml instead for a real VPN)
-    docker-compose.ytresolver.yml    the ytresolver container (separate project: jukes-ytresolver)
 
 Start (no VPN):
 
     docker network create --subnet 172.18.0.0/16 web
     F="-f docker-compose.yml -f docker-compose.tunnel-named.yml -f docker-compose.novpn.yml -f docker-compose.fast.yml"
     docker compose $F up -d
-    docker compose -p jukes-ytresolver -f docker-compose.ytresolver.yml up -d
 
 Swap `docker-compose.novpn.yml` for `docker-compose.vpn.yml` to route everything through Gluetun.
 The app waits for Gluetun to be healthy, so a broken VPN config takes the service down; test a
@@ -41,3 +39,19 @@ admin password hash with hidden prompts; never paste them into chat or commit th
 
 - 1 GB VM: load average 19 and constant 502s while Chromium ran. 4 GB: load under 1.
 - Stop `youtube-browser` when nobody is signing in to save about 1 GB.
+
+## VPN exit near the VM
+
+The VM is in Azure Malaysia West. A London exit costs about 242 ms per TCP connect and about 5 s per
+cold song; a Singapore exit costs about 8 ms and under 1 s. Gluetun's built-in Surfshark list picks
+the server (the per-server WireGuard public keys differ, so copying a profile and changing only the
+Endpoint does not work). In `.env`:
+
+    VPN_SERVICE_PROVIDER=surfshark  VPN_TYPE=wireguard
+    WIREGUARD_PRIVATE_KEY=<from your Surfshark wg conf>  WIREGUARD_ADDRESSES=10.14.0.2/16
+    VPN_NATIVE_SERVER_COUNTRIES=Singapore
+
+Move `vpn/.generated/wg0.conf` aside: gluetun reads it automatically and its endpoint port conflicts
+with the built-in server list ("endpoint port is set"). Roll back by restoring the old `.env` values
+(`VPN_SERVICE_PROVIDER=custom`) and moving the file back. After any gluetun recreate, run
+`docker restart ytresolver` if it shows unhealthy: it may have started during gluetun's restart loop.

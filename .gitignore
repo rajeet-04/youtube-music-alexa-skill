@@ -36,3 +36,5 @@ vpn/.generated/*
 !vpn/.generated/.gitkeep
 
 .superpowers/
+.env.bak-*
+vpn/.generated/*.in-mum-custom
