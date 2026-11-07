@@ -6,7 +6,8 @@ Requires=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/home/azureuser/youtube-music-alexa-skill/scripts/start-stack.sh
+# install-host.sh replaces __DIR__ with the checkout path
+ExecStart=__DIR__/scripts/start-stack.sh
 TimeoutStartSec=400
 
 [Install]

@@ -12,6 +12,8 @@ echo "gluetun health: $health"
 # Gluetun logs "Public IP address is <ip> (<country>, <region>, <city> ...)" after connecting.
 line=$(docker logs "$CONTAINER" 2>&1 | grep "Public IP address is" | tail -1 || true)
 echo "gluetun reports: ${line#*Public IP address is }"
+# .env is not sourced (it holds secrets): read only this one setting from it.
+EXPECTED_COUNTRY="${EXPECTED_COUNTRY:-$(sed -n 's/^EXPECTED_COUNTRY=//p' "$(dirname "$0")/../.env" 2>/dev/null | tail -1)}"
 case "${EXPECTED_COUNTRY:-IN}" in
     IN) want="India" ;;
     *) want="${EXPECTED_COUNTRY}" ;;

@@ -43,3 +43,10 @@ measured 160-175 ms from Malaysia and geolocate to Europe in some databases (vir
 
 Re-run it after changing `VPN_PROFILE` or if the connection stops working (server IPs can change),
 then `docker compose ... up -d --force-recreate gluetun`.
+
+## Preferred: Gluetun's built-in Surfshark server list
+
+Per-server WireGuard public keys differ, so a profile file only works for the exact server it
+came from. For a new host use `VPN_SERVICE_PROVIDER=surfshark` with `WIREGUARD_PRIVATE_KEY`,
+`WIREGUARD_ADDRESSES` and `VPN_NATIVE_SERVER_COUNTRIES=<country nearest the VM>` in `.env`
+(see `.env.example` and docs/DEPLOY.md). Leave `vpn/.generated/` empty in that mode.

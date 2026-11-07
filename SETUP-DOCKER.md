@@ -143,21 +143,9 @@ Alexa cookie volume is no longer mounted or managed by this Compose file; leave
 its existing Docker volume and contents alone. Do not use `docker compose down
 -v`, Docker volume pruning, or manual volume removal for this migration.
 
-The `web` network is declared external, so it must already exist. Gluetun needs
-the configured alias on that network, and bgutil-provider must join the same
-network. The helper can retry that provider attachment after Docker starts:
-
-```bash
-sudo cp scripts/ensure-bgutil-network.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now ensure-bgutil-network.service
-sudo systemctl status ensure-bgutil-network.service
-```
-
-The checked-in unit expects this repository at
-`/home/ubuntu/youtube-music-alexa-skill`; edit its `ExecStart` path if your
-checkout is elsewhere. The script changes no VPN/network policy and only
-attaches the external provider to the existing `web` network.
+The `web` network is declared external, so it must already exist (scripts/install-host.sh creates
+it). The bgutil provider now runs inside `docker-compose.vpn.yml` in Gluetun's network, so no
+separate attachment helper is needed. See docs/DEPLOY.md for the current runbook.
 
 ## Start and verify
 
