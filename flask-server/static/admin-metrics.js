@@ -44,11 +44,21 @@
     container.replaceChildren();
     container.append(element('p','Backend '+current.health+' · Metrics collected since '+new Date(m.started_at*1000).toLocaleString()+
       ' · Window coverage '+Math.round(w.coverage_seconds/60)+' min. Counters have 60-second resolution.','muted'));
+    const tone=(v,warn,bad)=>!number(v)?'':v>=bad?'bad':v>=warn?'warn':'good';
+    const kpis=element('div',undefined,'kpis');container.append(kpis);
+    function kpi(label,value,cls){const k=element('div',undefined,'kpi '+(cls||''));k.append(element('span',label),element('b',value));kpis.append(k);}
+    kpi('Backend',current.health,current.health==='ok'||current.health==='healthy'?'good':'warn');
+    kpi('Failure rate',formatPercent(w.failure_rate),tone(w.failure_rate,0.05,0.2));
+    kpi('P50 prep',formatSeconds(w.latency.all.p50_seconds),tone(w.latency.all.p50_seconds,6,12));
+    kpi('P95 prep',formatSeconds(w.latency.all.p95_seconds),tone(w.latency.all.p95_seconds,12,25));
+    kpi('Cache hit rate',formatPercent(w.cache_hit_rate),'');
+    kpi('Queue',count(jobs.jobs.queued)+' / '+count(jobs.queue_limit),tone(jobs.queue_utilization,0.6,0.9));
+    kpi('CPU',number(res.cpu.percent)?res.cpu.percent.toFixed(1)+'%':'n/a',tone(res.cpu.percent/100,0.7,0.9));
     const grid=element('div',undefined,'metrics-grid');container.append(grid);
     function panel(title,rows,note) {
       const p=element('div',undefined,'metric-panel');p.append(element('h3',title));
       const table=element('table');p.append(table);
-      for(const [label,value] of rows){const tr=element('tr');tr.append(element('td',label),element('td',value));table.append(tr);}
+      for(const [label,value] of rows){const tr=element('tr');const bad=/fail|reject|missing|dropped|unknown/i.test(label)&&!/rate|%/.test(String(value))&&/^[1-9]/.test(String(value));tr.append(element('td',label),element('td',value,bad?'neg':''));table.append(tr);}
       if(note)p.append(element('p',note,'muted'));grid.append(p);return p;
     }
     const lifetime=(key)=>count(life[key]||0), selected=(key)=>count(c[key]||0);
@@ -119,10 +129,10 @@
       const line=document.createElementNS('http://www.w3.org/2000/svg','polyline');
       line.setAttribute('points',points.filter((_,i)=>i%Math.max(1,Math.ceil(points.length/120))===0 || i===points.length-1)
         .map(t=>(4+(t.at-minAt)/Math.max(60,maxAt-minAt)*232)+','+(38-t[key]/max*34)).join(' '));
-      line.setAttribute('fill','none');line.setAttribute('stroke','#287');line.setAttribute('stroke-width','2');svg.append(line);p.append(svg);
+      line.setAttribute('fill','none');line.setAttribute('stroke-width','2');svg.append(line);p.append(svg);
       p.append(element('span','Latest '+fmt(points.at(-1)[key])+' · '+points.length+' active minutes','muted'));
     }
-    function bar(parent,value){const b=element('div',undefined,'bar');const fill=element('i');fill.style.width=(number(value)?Math.min(100,Math.max(0,value*100)):0)+'%';b.append(fill);parent.append(b);}
+    function bar(parent,value){const b=element('div',undefined,'bar'+(number(value)?(value>=0.9?' bad':value>=0.65?' warn':''):''));const fill=element('i');fill.style.width=(number(value)?Math.min(100,Math.max(0,value*100)):0)+'%';b.append(fill);parent.append(b);}
     function speed(v){return number(v)?(v/1e6).toFixed(3)+' MB/s':'Unavailable';}
   }
   if(typeof module==='object' && module.exports) module.exports={createController,formatPercent,formatSeconds,render};
