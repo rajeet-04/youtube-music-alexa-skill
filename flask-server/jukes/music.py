@@ -442,10 +442,14 @@ class Music:
         query = f"{_core_title(title)} {artist}".strip()
         try:
             return self._pick(self._search(client, query), selector, strict_artist=False)
-        except NoMatch:
+        except (NoMatch, RejectedMatch) as songs_miss:
             # Some releases (e.g. artist-channel uploads) are YouTube videos, not "songs", so the
             # songs filter never lists them. Same checks, but the artist must then be credited.
-            return self._pick(self._search(client, query, "videos"), selector, strict_artist=True)
+            try:
+                return self._pick(self._search(client, query, "videos"), selector, strict_artist=True)
+            except NoMatch:
+                # Keep the more informative miss: songs existed but were the wrong version.
+                raise songs_miss from None
 
     def _pick(self, items: list[dict[str, Any]], selector: TrackSelector, *, strict_artist: bool) -> Track:
         title, artist = selector.title or "", selector.artist or ""

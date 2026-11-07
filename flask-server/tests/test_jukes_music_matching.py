@@ -163,3 +163,10 @@ def test_length_gap_beyond_a_quarter_is_still_rejected():
     yt = YT(songs=[item("longlonglon", "Sapne", ["Lashcurry"], "6:00")])
     with pytest.raises(RejectedMatch):
         resolve(yt, "Sapne", "Lashcurry", 197_000)
+
+
+def test_songs_rejected_for_length_still_try_the_video_upload():
+    yt = YT(songs=[item("longlonglon", "Main Dhoondne Ko Zamaane Mein", ["Gaurav Dagaonkar"], "2:00")],
+            videos=[item("xQrMELqpf6E", "Main Dhoondne Ko Zamaane Mein", ["Gaurav Dagaonkar"], "4:24")])
+    assert resolve(yt, "Main Dhoondne Ko Zamaane Mein", "Gaurav Dagaonkar", 262_000).video_id == "xQrMELqpf6E"
+    assert yt.filters == ["songs", "videos"]
