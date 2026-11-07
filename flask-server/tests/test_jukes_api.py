@@ -557,3 +557,23 @@ def test_overlap_metadata_failure_remains_one_failed_preparation(env, monkeypatc
     totals = env.cache.metrics.snapshot()['lifetime']
     assert totals['prepare_failed'] == 1
     assert totals.get('prepare_success', 0) == 0
+
+
+def test_resolve_only_warmup_downloads_nothing(env):
+    env.yt.items = [song(VID, "Song Name", "Some Artist", 200)]
+    r = post(env, "/v1/warmup?resolve_only=1&source=search", {"title": "Song Name", "artist": "Some Artist", "duration_ms": 200_000})
+    assert r.status_code == 200 and r.get_json()["video_id"] == VID and r.get_json()["status"] == "resolved"
+    assert env.extractor.calls == []
+    m = env.app.extensions['jukes_metrics'].snapshot()
+    assert m['lifetime']['warmup_resolve'] == 1 and m['lifetime'].get('warmup_request', 0) == 0
+
+
+def test_warmup_source_counts_start_and_first_use(env):
+    first = post(env, '/v1/warmup?source=queue', {'video_id': VID})
+    post(env, '/v1/warmup?source=queue', {'video_id': VID})  # duplicate: not counted again
+    post(env, '/v1/warmup?source=bogus', {'video_id': 'abcdefghijk'})  # unknown tag: ignored
+    wait_ready(env, first.get_json()['job_id'])
+    prepared(env)
+    m = env.app.extensions['jukes_metrics'].snapshot()['lifetime']
+    assert m['warmup_src_queue'] == 1 and m['warmup_used_queue'] == 1
+    assert not any(k.endswith('bogus') for k in m)

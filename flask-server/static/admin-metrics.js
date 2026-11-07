@@ -107,6 +107,10 @@
       ['Warmup expirations',selected('warmup_expiration')],['Duplicate / cached requests',count((c.warmup_duplicate||0)+(c.warmup_cached||0))]
     ],'Cohort: '+w.warmup_cohort.consumed+' consumed / '+w.warmup_cohort.completed+' completed'+(w.warmup_cohort.maturing?' (still maturing)':'')+
       '. Lifetime: '+lifetime('warmup_request')+' requests, '+lifetime('warmup_success')+' successful, '+lifetime('warmup_consumed')+' consumed; usefulness '+formatPercent(ratio(life.warmup_consumed||0,life.warmup_success||0))+'.');
+    panel('Warmup by source · selected window',[
+      ...['search','album','playlist','queue','jam','home'].map(s=>[s+' used / started',selected('warmup_used_'+s)+' / '+selected('warmup_src_'+s)]),
+      ['Resolve-only warmups',selected('warmup_resolve')]
+    ],'Started = new background downloads this trigger caused; used = later played. Resolve-only warmups only cache the match and metadata.');
     const capacity=panel('Queue and workers · current',[
       ['Queue / capacity',count(jobs.jobs.queued)+' / '+count(jobs.queue_limit)],['Queue utilization',formatPercent(jobs.queue_utilization)],
       ['Active / configured workers',count(jobs.active_workers)+' / '+count(jobs.workers)],['Worker utilization',formatPercent(jobs.worker_utilization)]

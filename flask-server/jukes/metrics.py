@@ -5,6 +5,8 @@ import math
 import time
 from contextlib import nullcontext
 
+# Where a warmup came from (the app's `source` query parameter), to see which triggers pay off.
+WARM_SOURCES = ('search', 'album', 'playlist', 'queue', 'jam', 'home')
 EVENTS = frozenset(('job_completed', 'job_failed', 'prepare_success', 'prepare_failed',
     'temporary_failure', 'terminal_failure', 'retry_fallback', 'retry_recovery',
     'cache_hit', 'cache_miss', 'main_hit', 'warmup_hit', 'joined',
@@ -12,7 +14,7 @@ EVENTS = frozenset(('job_completed', 'job_failed', 'prepare_success', 'prepare_f
     'warmup_request', 'warmup_duplicate', 'warmup_cached', 'warmup_started',
     'warmup_success', 'warmup_consumed', 'warmup_inflight', 'warmup_failed',
     'admission_rejected', 'latency_dropped', 'job_timing', 'prepare_outcome_unknown',
-    'extraction_source', 'fast_fallback'))
+    'extraction_source', 'fast_fallback', 'warmup_resolve') + tuple(f'warmup_{k}_{s}' for k in ('src', 'used') for s in WARM_SOURCES))
 # 'fast'/'ytdlp' split successful extractions by source (the warm sidecar vs yt-dlp).
 CATEGORIES = ('all', 'cold', 'cached', 'joined', 'promoted', 'warmed', 'recovered', 'queue', 'extraction',
     'fast', 'ytdlp')

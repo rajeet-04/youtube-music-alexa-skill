@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections import OrderedDict
 import re
 import time
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from .credentials import (
 from .identity import InvalidInstallationToken
 from .jobs import Job, JobQueueFull
 from .limits import RateLimiter, client_address, is_trusted_peer
+from .metrics import WARM_SOURCES
 from .models import AudioKey, CacheCapacityError
 from .music import (
     VIDEO_ID_RE, ANONYMOUS, MusicError, Track, TrackSelector, UserContext,
@@ -263,6 +265,7 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
             raise ApiError(MUSIC_STATUS.get(error.code, 502), error.code, str(error), error.retryable) from None
 
     metrics = cache.metrics
+    warm_src: 'OrderedDict[AudioKey, str]' = OrderedDict()  # warmups awaiting a first use, by source
 
     def preparation_path(key):
         entry = cache.lookup(key)
@@ -273,6 +276,8 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
     def observed_submit(key, started_at, admitted=None):
         observation = metrics.begin_preparation(started_at)
         entry, joined, category = admitted[1] if admitted else preparation_path(key)
+        if category in ('warmed', 'promoted') and (src := warm_src.pop(key, None)):
+            metrics.record('warmup_used_' + src)
         try:
             job = jobs.get(admitted[0].job_id) or admitted[0] if admitted else submit(key, True)
         except ApiError:
@@ -430,14 +435,24 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
                 observation = metrics.begin_preparation(started_at)
                 metrics.finish_preparation(observation,success=False,duration_seconds=time.time()-started_at,retryable=error.retryable)
             raise
+        if not requested and request.args.get('resolve_only') == '1':
+            # Cheap tier: match + metadata are cached for the tap that follows; no download.
+            metrics.record('warmup_resolve')
+            return jsonify({**track.as_dict(), "job_id": "", "status": "resolved"})
         key = AudioKey(track.video_id, AUDIO_POLICY)
         if request.args.get('progressive')=='1' and streams: streams.request(key)
-        if admitted is None and not jobs.has_active(key) and cache.lookup(key) is None:  # only genuinely new work
+        fresh = admitted is None and not jobs.has_active(key) and cache.lookup(key) is None
+        if fresh:  # only genuinely new work
             if requested:
                 throttle("requested", settings.requested_per_minute)
             else:
                 throttle("warmup", settings.warmup_per_minute)
         job = observed_submit(key, started_at, admitted) if requested else submit(key, False)
+        if fresh and not requested and (src := request.args.get('source')) in WARM_SOURCES:
+            metrics.record('warmup_src_' + src)
+            warm_src[key] = src
+            while len(warm_src) > 2000:
+                warm_src.popitem(last=False)
         body = {**track.as_dict(), **job_view(job), "personalization_status": ctx.personalization_status}
         response = jsonify(body)
         response.status_code = 200 if job.status == "ready" else 202
