@@ -45,8 +45,8 @@
     container.append(element('p','Backend '+current.health+' · Metrics collected since '+new Date(m.started_at*1000).toLocaleString()+
       ' · Window coverage '+Math.round(w.coverage_seconds/60)+' min. Counters have 60-second resolution.','muted'));
     const tone=(v,warn,bad)=>!number(v)?'':v>=bad?'bad':v>=warn?'warn':'good';
-    const kpis=element('div',undefined,'kpis');container.append(kpis);
-    function kpi(label,value,cls){const k=element('div',undefined,'kpi '+(cls||''));k.append(element('span',label),element('b',value));kpis.append(k);}
+    const kpis=element('div',undefined,'vitals');container.append(kpis);
+    function kpi(label,value,cls){const k=element('div',undefined,'vital '+(cls||''));k.append(element('span',label),element('b',value));kpis.append(k);}
     kpi('Backend',current.health,current.health==='ok'||current.health==='healthy'?'good':'warn');
     kpi('Failure rate',formatPercent(w.failure_rate),tone(w.failure_rate,0.05,0.2));
     kpi('P50 prep',formatSeconds(w.latency.all.p50_seconds),tone(w.latency.all.p50_seconds,6,12));
@@ -117,7 +117,7 @@
       ['Disk free',bytes(res.disk.free_bytes)],['Network RX / TX',bytes(res.network.rx_bytes)+' / '+bytes(res.network.tx_bytes)],
       ['RX / TX rate',speed(res.network.rx_bytes_per_second)+' / '+speed(res.network.tx_bytes_per_second)]
     ],'CPU: '+res.cpu.scope+'. RAM: '+res.memory.scope+'. Network: '+res.network.scope+'. Rates need two samples; network throughput is not a bandwidth limit.');
-    const trends=element('div',undefined,'trends');container.append(element('h3','Rolling trends · selected window'),trends);
+    const trends=element('div',undefined,'trends');container.append(element('h3','Rolling trends · selected window','trends-head'),trends);
     for(const [key,label,fmt] of [['average_seconds','Mean preparation',formatSeconds],['failure_rate','Failure rate',formatPercent],
       ['cache_hit_rate','Audio hit rate',formatPercent],['warmup_consumed','Warmup consumption',count]]) {
       const p=element('div',undefined,'trend');trends.append(p);p.append(element('span',label));
@@ -129,7 +129,7 @@
       const line=document.createElementNS('http://www.w3.org/2000/svg','polyline');
       line.setAttribute('points',points.filter((_,i)=>i%Math.max(1,Math.ceil(points.length/120))===0 || i===points.length-1)
         .map(t=>(4+(t.at-minAt)/Math.max(60,maxAt-minAt)*232)+','+(38-t[key]/max*34)).join(' '));
-      line.setAttribute('fill','none');line.setAttribute('stroke-width','2');svg.append(line);p.append(svg);
+      line.setAttribute('fill','none');const base=document.createElementNS('http://www.w3.org/2000/svg','line');base.setAttribute('class','base');base.setAttribute('x1','4');base.setAttribute('x2','236');base.setAttribute('y1','38.5');base.setAttribute('y2','38.5');svg.append(base);line.setAttribute('stroke-width','1.5');svg.append(line);p.append(svg);
       p.append(element('span','Latest '+fmt(points.at(-1)[key])+' · '+points.length+' active minutes','muted'));
     }
     function bar(parent,value){const b=element('div',undefined,'bar'+(number(value)?(value>=0.9?' bad':value>=0.65?' warn':''):''));const fill=element('i');fill.style.width=(number(value)?Math.min(100,Math.max(0,value*100)):0)+'%';b.append(fill);parent.append(b);}
@@ -141,7 +141,7 @@
     const controller=createController({document:d,fetch:root.fetch.bind(root),render:(m,w)=>render(d,d.getElementById('metrics-content'),m,w),
       notice:text=>{d.getElementById('metrics-freshness').textContent=text;},setInterval:root.setInterval.bind(root),clearInterval:root.clearInterval.bind(root),now:Date.now});
     controller.start(JSON.parse(initial.textContent));
-    d.getElementById('metrics-window').addEventListener('change',e=>controller.select(e.target.value));
+    d.getElementById('metrics-window').addEventListener('click',e=>{const b=e.target.closest('button[data-window]');if(!b)return;for(const x of d.querySelectorAll('#metrics-window button'))x.setAttribute('aria-selected',String(x===b));controller.select(b.dataset.window);});
     d.addEventListener('visibilitychange',()=>{if(!d.hidden)controller.refresh();});
   }
 })(typeof window==='undefined'?null:window);
