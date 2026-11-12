@@ -98,8 +98,9 @@ class LyricsStore:
         with self.store.transaction() as connection:
             connection.execute("INSERT OR IGNORE INTO jukes_lyrics_contrib VALUES (?, ?, 'pending', 0, NULL, ?, ?)",
                                (video_id, payload, now, now))
-            if lines:
-                # Upgrade an unprocessed plain candidate without replacing a timed one.
+            if lines and result['source'] != 'youtube_captions':
+                # Upgrade an unprocessed plain candidate without replacing a timed one; machine
+                # captions never replace words a person typed.
                 row = connection.execute("SELECT payload FROM jukes_lyrics_contrib WHERE video_id = ? AND state = 'pending'", (video_id,)).fetchone()
                 if row and not json.loads(row['payload']).get('lines'):
                     connection.execute("UPDATE jukes_lyrics_contrib SET payload = ?, updated_at = ? WHERE video_id = ? AND state = 'pending'", (payload, now, video_id))

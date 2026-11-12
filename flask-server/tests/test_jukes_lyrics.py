@@ -385,8 +385,9 @@ def test_sound_labels_inside_a_line_are_removed():
         {'tStartMs': 1000, 'segs': [{'utf8': '[संगीत]'}, {'utf8': ' तेरे बिना', 'tOffsetMs': 300}]},
         {'tStartMs': 3000, 'segs': [{'utf8': 'जी हुज़ूर [संगीत]'}]},
         {'tStartMs': 5000, 'segs': [{'utf8': '[Music] [Applause]'}]},
+        {'tStartMs': 6000, 'segs': [{'utf8': '>> Yo.'}, {'utf8': ' >>', 'tOffsetMs': 500}]},
     ]})
-    assert [l['text'] for l in lines] == ['तेरे बिना', 'जी हुज़ूर']
+    assert [l['text'] for l in lines] == ['तेरे बिना', 'जी हुज़ूर', 'Yo.']
     assert lines[0]['segments'] == [{'text': ' तेरे बिना', 'start_ms': 1300}]
 
 
@@ -458,3 +459,13 @@ def test_timed_captions_are_offered_for_contribution(monkeypatch):
     monkeypatch.setattr(service, 'track_metadata', lambda *a: {'title': 'T'})
     service.lookup('t', 'a', video_id='abcdefghijk')
     assert store.offers == [('abcdefghijk', 'youtube_captions', {'title': 'T'})]
+
+
+def test_captions_never_replace_queued_typed_lyrics(tmp_path):
+    from jukes.lyrics_store import LyricsStore
+    from jukes.store import Store
+    store = LyricsStore(Store(tmp_path / 'db.sqlite3'))
+    meta = {'title': 'T', 'artist': 'A', 'duration_s': 222}
+    store.offer('a', {'source': 'youtube_music', 'plain_lyrics': 'typed'}, meta)
+    store.offer('a', {'source': 'youtube_captions', 'lines': [{'text': 'asr', 'start_ms': 0}]}, meta)
+    assert store.next_pending()[1]['source'] == 'youtube_music'

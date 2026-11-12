@@ -44,14 +44,14 @@ SEARCH_TOLERANCE_MS = 5_000   # LRCLIB search: record length vs the song
 WORD_SYNC_TOLERANCE_MS = 2_000  # a word-synced copy wins only when its length is this close
 LENGTH_TOLERANCE_MS = 3_000   # a YouTube video vs the song, without alignment
 LANGUAGES = ('en', 'hi', 'ur')
-CAPTION_RULES = 2             # bump when caption parsing changes: older cached captions are fetched again
+CAPTION_RULES = 3             # bump when caption parsing changes: older cached captions are fetched again
 HIT_TTL = 30 * 86400
 MISS_TTL = 86400
 UPGRADE_TTL = 15 * 60          # plain result cached while the background upgrade runs
 OFFICIAL_CANDIDATES = 3        # other uploads checked per song
 UPGRADES_PER_HOUR = 30
 LRC_RE = re.compile(r'\[(\d+):(\d{1,2}(?:\.\d{1,3})?)\]\s*(.*)')
-SOUND_LABEL = re.compile(r'\[[^\]]*\]')  # [Music], [संगीत], [Applause], also inside a line
+SOUND_LABEL = re.compile(r'\[[^\]]*\]|(?<!\S)>>+(?!\S)')  # [Music], [संगीत], ASR speaker change ">>"
 
 
 def _norm(text):
