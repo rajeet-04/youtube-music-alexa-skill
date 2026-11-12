@@ -1,8 +1,9 @@
 """Lyrics response cache and the LRCLIB contribution queue (same SQLite database).
 
-Contributions include audio-aligned subtitles and YouTube Music lyrics. A song is
-published only when LRCLIB has no equivalent or better record for its signature:
-publishing to an existing signature replaces that record's lyrics.
+Contributions include audio-aligned subtitles, YouTube Music lyrics and timed captions. A song
+is published only when LRCLIB has no equivalent or better record for its signature: publishing
+to an existing signature replaces that record's lyrics. Captions (often machine-made) only go
+where LRCLIB has nothing or its timing fails the checks.
 """
 
 from __future__ import annotations
@@ -154,7 +155,9 @@ class Publisher:
             if existing and existing['sync'] in ('line', 'word', 'instrumental'):
                 self.queue.mark(video_id, 'skipped', 'lrclib_has_timed')
                 return 'skipped'
-            if not lines and existing:
+            # Machine captions only fill a gap: no record, or one whose timing fails the checks.
+            if existing and (not lines or (payload.get('source') == 'youtube_captions'
+                                           and not existing.get('timing_rejected'))):
                 self.queue.mark(video_id, 'skipped', 'lrclib_has_lyrics')
                 return 'skipped'
             if lines and (timing_problem([l['start_ms'] for l in lines], meta['duration_s'] * 1000) or len(lines) < 4):

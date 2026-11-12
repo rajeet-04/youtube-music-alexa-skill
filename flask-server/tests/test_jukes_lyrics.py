@@ -431,3 +431,30 @@ def test_captions_cached_under_older_rules_are_fetched_again(tmp_path, monkeypat
     assert service.lookup('t', 'a', video_id='abcdefghijk') == fresh
     monkeypatch.setattr(service, '_resolve', lambda *args: pytest.fail('cached result is current'))
     assert service.lookup('t', 'a', video_id='abcdefghijk') == fresh
+
+
+def test_captions_are_published_only_where_lrclib_has_nothing_or_wrong_timing(tmp_path):
+    from jukes.lyrics_store import LyricsStore, Publisher
+    from jukes.store import Store
+    store = LyricsStore(Store(tmp_path / 'db.sqlite3'))
+    lines = [{'text': f'line {i}', 'start_ms': 1000 + i * 3210} for i in range(6)]
+    meta = {'title': 'T', 'artist': 'A', 'duration_s': 222}
+    def post(path, body, headers=None):
+        return (200, json.dumps({'prefix': 'p', 'target': 'ff' * 32}).encode()) if path == 'request-challenge' else (201, b'')
+    plain = {'id': 1, 'duration': 222, 'plainLyrics': 'typed by a person'}
+    coarse = {'id': 2, 'duration': 222, 'syncedLyrics': '\n'.join(f'[00:{s:02d}.00] x' for s in range(0, 60, 10))}
+    for vid, existing, state in (('a', plain, 'skipped'), ('b', coarse, 'published'), ('c', None, 'published')):
+        store.offer(vid, {'source': 'youtube_captions', 'lines': lines}, meta)
+        assert Publisher(store, post=post, fetch=lambda *a, e=existing: e).run_once() == state
+
+
+def test_timed_captions_are_offered_for_contribution(monkeypatch):
+    store = _MemoryStore()
+    service = Lyrics(contributions=store)
+    monkeypatch.setattr(service, '_rows', lambda: [])
+    monkeypatch.setattr(service, '_lrclib', lambda *a: None)
+    monkeypatch.setattr(service, '_music', lambda *a: None)
+    monkeypatch.setattr(service, '_youtube', lambda *a: {'source': 'youtube_captions', 'sync': 'line', 'lines': []})
+    monkeypatch.setattr(service, 'track_metadata', lambda *a: {'title': 'T'})
+    service.lookup('t', 'a', video_id='abcdefghijk')
+    assert store.offers == [('abcdefghijk', 'youtube_captions', {'title': 'T'})]
