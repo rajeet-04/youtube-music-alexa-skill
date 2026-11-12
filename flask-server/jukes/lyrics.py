@@ -44,12 +44,14 @@ SEARCH_TOLERANCE_MS = 5_000   # LRCLIB search: record length vs the song
 WORD_SYNC_TOLERANCE_MS = 2_000  # a word-synced copy wins only when its length is this close
 LENGTH_TOLERANCE_MS = 3_000   # a YouTube video vs the song, without alignment
 LANGUAGES = ('en', 'hi', 'ur')
+CAPTION_RULES = 2             # bump when caption parsing changes: older cached captions are fetched again
 HIT_TTL = 30 * 86400
 MISS_TTL = 86400
 UPGRADE_TTL = 15 * 60          # plain result cached while the background upgrade runs
 OFFICIAL_CANDIDATES = 3        # other uploads checked per song
 UPGRADES_PER_HOUR = 30
 LRC_RE = re.compile(r'\[(\d+):(\d{1,2}(?:\.\d{1,3})?)\]\s*(.*)')
+SOUND_LABEL = re.compile(r'\[[^\]]*\]')  # [Music], [संगीत], [Applause], also inside a line
 
 
 def _norm(text):
@@ -162,11 +164,12 @@ def caption_lines(payload, kind='automatic_captions'):
         segments = [s for s in segments if isinstance(s, dict) and isinstance(s.get('utf8'), str)]
         if bilingual:
             rows = [r for r in ''.join(s['utf8'] for s in segments).replace('♪', '').split('\n') if r.strip()]
-            text, segments = ' '.join((rows[0] if rows else '').split()), []
+            text, segments = ' '.join(SOUND_LABEL.sub(' ', rows[0] if rows else '').split()), []
         else:
-            segments = [{**s, 'utf8': s['utf8'].replace('♪', '').replace('\n', ' ')} for s in segments]
+            segments = [{**s, 'utf8': SOUND_LABEL.sub('', s['utf8'].replace('♪', '').replace('\n', ' '))}
+                        for s in segments]
             segments = [s for s in segments if s['utf8'].strip()]
-            text = ' '.join(''.join(s['utf8'] for s in segments).split())
+            text = ' '.join(SOUND_LABEL.sub(' ', ''.join(s['utf8'] for s in segments)).split())
         # Drop sound labels such as [Music], [RINGING SOUND], (applause), [संगीत].
         if not text or re.fullmatch(r'[\[(][^\])]*[\])]', text):
             continue
@@ -351,14 +354,27 @@ class Lyrics:
     def _tracks(downloader, info, kinds):
         """Caption lines of the first usable track: (lines, language, kind), or None."""
         attempts = failures = 0
+        # yt-dlp marks the ASR track in the sung language "<lang>-orig". When it is known, only
+        # tracks in that language count: a Hindi song gets Hindi (or Urdu, the same speech) lyrics,
+        # never an English translation, even one an uploader typed in.
+        sung = next((lang.lower().split('-')[0] for lang in info.get('automatic_captions') or {}
+                     if lang.endswith('-orig')), None)
+        order = {'en': ['en'], 'hi': ['hi', 'ur'], 'ur': ['ur', 'hi']}.get(sung, list(LANGUAGES))
+
+        def own(fmts):
+            # Machine translations (Hindi ASR shown as English) carry tlang= in the URL.
+            return next((x for x in fmts if x.get('ext') == 'json3' and 'tlang' not in
+                         urllib.parse.parse_qs(urllib.parse.urlsplit(x.get('url') or '').query)), None)
+
         for kind in kinds:
             tracks = info.get(kind) or {}
-            languages = sorted((lang for lang in tracks if lang.lower().split('-')[0] in LANGUAGES),
-                               key=lambda lang: LANGUAGES.index(lang.lower().split('-')[0]))
-            for lang in languages[:4]:
-                fmt = next((x for x in tracks[lang] if x.get('ext') == 'json3'), None)
-                if not fmt:
-                    continue
+            found = {}
+            for lang, fmts in tracks.items():
+                base = lang.lower().split('-')[0]
+                if base in order and base not in found and (fmt := own(fmts or [])):
+                    found[base] = (lang.removesuffix('-orig'), fmt)
+            for base in sorted(found, key=order.index):
+                lang, fmt = found[base]
                 attempts += 1
                 for retry in range(2):  # timedtext sometimes fails once (seen on Ji Huzoor, 18m9ovEsP6s)
                     try:
@@ -400,6 +416,7 @@ class Lyrics:
         result = {'source': 'youtube_captions',
                   'sync': 'segment' if any(line.get('segments') for line in lines) else 'line',
                   'verified': False, 'video_id': video_id, 'language': lang, 'caption_kind': kind,
+                  'caption_rules': CAPTION_RULES,
                   'duration_ms': round(actual * 1000) if isinstance(actual, (int, float)) else None,
                   'lines': lines, 'plain_lyrics': '\n'.join(line['text'] for line in lines)}
         return self._checked(result, duration)
@@ -500,7 +517,7 @@ class Lyrics:
                 continue
             return {'source': 'youtube_subtitles', 'sync': 'line', 'verified': False,
                     'video_id': video_id, 'subtitle_video_id': candidate, 'offset_ms': round(shift * 1000),
-                    'language': lang, 'caption_kind': 'subtitles', 'lines': moved,
+                    'language': lang, 'caption_kind': 'subtitles', 'caption_rules': CAPTION_RULES, 'lines': moved,
                     'plain_lyrics': '\n'.join(line['text'] for line in moved)}
         return None
 
@@ -577,7 +594,9 @@ class Lyrics:
     def lookup(self, title, artist, album='', duration=None, video_id=''):
         from .routes import ApiError
         key = self.cache_key(title, artist, album, duration, video_id)
-        if self.store and (hit := self.store.get(key)) is not self.store.MISS:
+        if self.store and (hit := self.store.get(key)) is not self.store.MISS and not (
+                hit and hit.get('source') in ('youtube_captions', 'youtube_subtitles')
+                and hit.get('caption_rules') != CAPTION_RULES):
             if hit is None:
                 return None
             return hit

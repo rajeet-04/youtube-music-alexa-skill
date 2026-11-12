@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from jukes.lyrics import Lyrics, caption_lines
+from jukes.lyrics import CAPTION_RULES, Lyrics, caption_lines
 from jukes.routes import ApiError
 
 
@@ -204,7 +204,8 @@ def test_plain_result_is_upgraded_in_background_cached_and_offered(monkeypatch):
     monkeypatch.setattr(service, '_lrclib', lambda *a: {'source': 'lrclib', 'sync': 'none', 'timing_rejected': 'whole_seconds'})
     monkeypatch.setattr(service, '_music', lambda *a: None)
     monkeypatch.setattr(service, '_youtube', lambda *a: None)
-    better = {'source': 'youtube_subtitles', 'sync': 'line', 'lines': [{'text': 'x', 'start_ms': 0}]}
+    better = {'source': 'youtube_subtitles', 'sync': 'line', 'caption_rules': CAPTION_RULES,
+              'lines': [{'text': 'x', 'start_ms': 0}]}
     monkeypatch.setattr(service, '_official', lambda *a: better)
     monkeypatch.setattr(service, 'track_metadata', lambda *a: {'title': 'T', 'artist': 'A', 'duration_s': 222})
     first = service.lookup('Rangeen', 'Hasan Raheem', duration=222000, video_id='J78lINC__HE')
@@ -377,3 +378,56 @@ def test_word_synced_copy_beats_a_line_synced_exact_match():
     fetch = lambda kind, params: line if kind == 'get' else [line, far]
     assert Lyrics._lrclib.__get__(type('L', (), {'_lrclib_fetch': staticmethod(fetch), '_record': staticmethod(Lyrics._record)})())(
         'Blinding Lights', 'The Weeknd', '', 200_000)['lrclib_id'] == 1
+
+
+def test_sound_labels_inside_a_line_are_removed():
+    lines = caption_lines({'events': [
+        {'tStartMs': 1000, 'segs': [{'utf8': '[संगीत]'}, {'utf8': ' तेरे बिना', 'tOffsetMs': 300}]},
+        {'tStartMs': 3000, 'segs': [{'utf8': 'जी हुज़ूर [संगीत]'}]},
+        {'tStartMs': 5000, 'segs': [{'utf8': '[Music] [Applause]'}]},
+    ]})
+    assert [l['text'] for l in lines] == ['तेरे बिना', 'जी हुज़ूर']
+    assert lines[0]['segments'] == [{'text': ' तेरे बिना', 'start_ms': 1300}]
+
+
+def test_hindi_song_keeps_its_own_words_not_the_english_translation(monkeypatch):
+    import yt_dlp
+    fetched = []
+    hindi = {'events': [{'tStartMs': 1000, 'segs': [{'utf8': 'तेरे बिना'}]},
+                        {'tStartMs': 2500, 'segs': [{'utf8': 'जी हुज़ूर'}]}]}
+
+    class FakeDL:
+        def __init__(self, opts): self.cookiejar = type('J', (), {'set_cookie': lambda *a: None})()
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def extract_info(self, url, download, process):
+            asr = 'https://www.youtube.com/api/timedtext?v=x&lang=hi&kind=asr&fmt=json3'
+            return {'duration': 200, 'subtitles': {'en': [{'ext': 'json3', 'url': 'english-by-uploader'}]},
+                    'automatic_captions': {
+                'en': [{'ext': 'json3', 'url': asr + '&tlang=en'}],
+                'hi-orig': [{'ext': 'json3', 'url': asr}],
+                'hi': [{'ext': 'json3', 'url': asr}],
+                'ur': [{'ext': 'json3', 'url': asr + '&tlang=ur'}]}}
+        def urlopen(self, url):
+            fetched.append(url)
+            return __import__('io').BytesIO(json.dumps(hindi).encode())
+
+    monkeypatch.setattr(yt_dlp, 'YoutubeDL', FakeDL)
+    result = Lyrics()._youtube('abcdefghijk', 200000, [])
+    assert [l['text'] for l in result['lines']] == ['तेरे बिना', 'जी हुज़ूर']
+    assert result['language'] == 'hi'
+    assert fetched and all('tlang' not in url and 'english' not in url for url in fetched)
+
+
+def test_captions_cached_under_older_rules_are_fetched_again(tmp_path, monkeypatch):
+    from jukes.lyrics_store import LyricsStore
+    from jukes.store import Store
+    store = LyricsStore(Store(tmp_path / 'db.sqlite3'))
+    service = Lyrics(store=store)
+    key = service.cache_key('t', 'a', '', None, 'abcdefghijk')
+    store.put(key, {'source': 'youtube_captions', 'sync': 'line', 'plain_lyrics': '[संगीत] old'}, 3600)
+    fresh = {'source': 'youtube_captions', 'sync': 'line', 'caption_rules': CAPTION_RULES}
+    monkeypatch.setattr(service, '_resolve', lambda *args: (fresh, False))
+    assert service.lookup('t', 'a', video_id='abcdefghijk') == fresh
+    monkeypatch.setattr(service, '_resolve', lambda *args: pytest.fail('cached result is current'))
+    assert service.lookup('t', 'a', video_id='abcdefghijk') == fresh
