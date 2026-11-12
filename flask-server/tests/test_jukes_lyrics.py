@@ -336,3 +336,15 @@ def test_lrclib_search_falls_back_to_plain_when_all_timing_is_rejected(monkeypat
         {'id': 2, 'trackName': 'Rangeen | Coke Studio Nu.WAV', 'artistName': 'A', 'duration': 222, 'plainLyrics': 'words'}])
     result = Lyrics()._lrclib('Rangeen', 'A', '', 222000)
     assert result['sync'] == 'none' and result['lrclib_id'] == 2   # closest; no bad timing returned
+
+
+def test_subtitle_decoration_is_removed():
+    # Ji Huzoor (Sparsh), uploader subtitles on 18m9ovEsP6s
+    texts = ['Dil Tere Agge.....', 'CHADHEYA CHADHEYA, ISHQ FITOOR,,,,', '*JI HUZOOR JI HUZOOR*',
+             'Tere Naal Laiyaan,Laiyaan....', ' ', '....♡♡♡♡♡♡♡♡♡....', 'Kya hua?', 'Tu Hi Toh Mera ASMAAN.......']
+    payload = {'events': [{'tStartMs': i * 1000, 'dDurationMs': 900, 'segs': [{'utf8': t}]} for i, t in enumerate(texts)]}
+    assert [l['text'] for l in caption_lines(payload, 'subtitles')] == [
+        'Dil Tere Agge', 'Chadheya Chadheya, Ishq Fitoor', 'Ji Huzoor Ji Huzoor',
+        'Tere Naal Laiyaan,Laiyaan', 'Kya hua?', 'Tu Hi Toh Mera ASMAAN']
+    # ASR captions are left as they are
+    assert caption_lines(payload)[0]['text'] == 'Dil Tere Agge.....'

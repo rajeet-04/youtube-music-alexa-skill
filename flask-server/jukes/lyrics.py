@@ -23,6 +23,7 @@ import concurrent.futures
 import contextlib
 import http.cookiejar
 import json
+import time
 import logging
 import os
 import re
@@ -125,6 +126,28 @@ def _bilingual(events):
     return len(second) >= 0.8 * len(multi)
 
 
+_EDGE = r'[\s.,;:~*_\-]'
+
+
+def tidy_subtitle(text):
+    """An uploader's decoration removed: "Dil Tere Agge.....", "ISHQ FITOOR,,,,", "*JI HUZOOR*".
+
+    Lines written in capitals are shouting the same words as elsewhere in the song, so they are
+    put in title case. Returns '' for a line without words, such as "....♡♡♡....".
+    """
+    text = text.replace('*', ' ')
+    text = re.sub(r',{2,}', ',', re.sub(r'\.{2,}', '…', text))
+    text = re.sub(f'^(?:{_EDGE}|…)+', '', text)
+    text = re.sub(f'(?:{_EDGE}|…)+$', '', text)
+    text = ' '.join(text.split())
+    letters = [c for c in text if c.isalpha()]
+    if not letters:
+        return ''
+    if len(letters) >= 4 and all(c.isascii() for c in letters) and text == text.upper():
+        text = ' '.join(word[:1] + word[1:].lower() for word in text.split(' '))
+    return text
+
+
 def caption_lines(payload, kind='automatic_captions'):
     """Lines with start/end times; segment offsets are kept, never claimed as word sync."""
     events = [e for e in payload.get('events', []) if isinstance(e, dict)]
@@ -146,6 +169,10 @@ def caption_lines(payload, kind='automatic_captions'):
         # Drop sound labels such as [Music], [RINGING SOUND], (applause), [संगीत].
         if not text or re.fullmatch(r'[\[(][^\])]*[\])]', text):
             continue
+        if kind == 'subtitles' and not any(isinstance(seg.get('tOffsetMs'), int) for seg in segments):
+            # Hand-made subtitles carry the uploader's decoration; ASR captions don't.
+            if not (text := tidy_subtitle(text)):
+                continue
         line = {'text': text, 'start_ms': start}
         if isinstance(event.get('dDurationMs'), int) and event['dDurationMs'] > 0:
             line['end_ms'] = start + event['dDurationMs']
@@ -327,16 +354,27 @@ class Lyrics:
                 if not fmt:
                     continue
                 attempts += 1
+                for retry in range(2):  # timedtext sometimes fails once (seen on Ji Huzoor, 18m9ovEsP6s)
+                    try:
+                        with downloader.urlopen(fmt['url']) as response:
+                            raw = response.read(MAX_RESPONSE + 1)
+                        break
+                    except Exception as exc:
+                        log.warning('Caption track fetch failed: %s %s', type(exc).__name__,
+                                    getattr(exc, 'status', None) or getattr(exc, 'code', '') or '')
+                        if retry == 0:
+                            time.sleep(1)
+                else:
+                    failures += 1
+                    continue
+                if len(raw) > MAX_RESPONSE:
+                    continue
                 try:
-                    with downloader.urlopen(fmt['url']) as response:
-                        raw = response.read(MAX_RESPONSE + 1)
-                    if len(raw) > MAX_RESPONSE:
-                        continue
                     if lines := caption_lines(json.loads(raw), kind):
                         return lines, lang, kind
-                except Exception:
+                except ValueError:
                     failures += 1
-                    log.warning('Caption track fetch failed')
+                    log.warning('Caption track was not JSON')
         if attempts and failures == attempts:
             # Every track errored: an upstream failure (502), not "no lyrics" (404).
             raise OSError('all caption fetches failed')
