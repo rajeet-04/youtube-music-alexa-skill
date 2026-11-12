@@ -34,3 +34,5 @@ node_modules/
 **/download_cookies.txt
 vpn/.generated/*
 !vpn/.generated/.gitkeep
+
+.superpowers/

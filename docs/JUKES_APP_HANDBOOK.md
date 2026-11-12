@@ -25,7 +25,7 @@ tap play     ─▶ POST /v1/audio/prepare ─▶ 200 ready | 202 queued/downloa
 - One job per track, shared by everyone. Calling warmup/prepare repeatedly is safe
   and free when the file is cached.
 - Anonymous by default. No login. Personalisation is optional (section 7).
-- Two caches: **requested** (10 GB, LRU, no expiry) and **warmup** (1 GB, 2 h TTL).
+- Two caches: **requested** (20 GB, LRU, no expiry) and **warmup** (1 GB, 2 h TTL).
   `prepare` promotes a warmup in place, even mid-download.
 
 ## 2. Configuration

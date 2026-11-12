@@ -9,12 +9,15 @@ are rejected instead of silently substituted.
 from __future__ import annotations
 
 import difflib
+import logging
 import re
 import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Callable
+
+log = logging.getLogger(__name__)
 
 VIDEO_ID_RE = re.compile(r"\A[A-Za-z0-9_-]{11}\Z")
 
@@ -115,6 +118,53 @@ def _score(query: str, text: str) -> float:
     return hit / len(wanted)
 
 
+def _squash(text: str) -> str:
+    return "".join(_tokens(text))
+
+
+def _artist_score(wanted: str, credited: tuple[str, ...]) -> float:
+    """0..1 artist agreement; "Lash Curry" equals the credit "Lashcurry" (spacing is not identity)."""
+    flat = _squash(wanted)
+    if not flat:
+        return 1.0
+    names = [_squash(a) for a in credited if a]
+    if any(flat == n or (len(flat) >= 4 and (flat in n or n in flat) and min(len(flat), len(n)) >= 4) for n in names):
+        return 1.0
+    return _score(wanted, " ".join(credited))
+
+
+_NOISE_TOKENS = {"feat", "ft", "featuring", "with", "from", "official", "audio", "video", "lyrics", "lyric",
+                 "hd", "hq", "song", "music", "edit", "remastered", "remaster"}
+
+
+def _title_precision(query: str, candidate: str, artists: tuple[str, ...]) -> float:
+    """1.0 when the candidate adds nothing beyond the query (and its own artists).
+
+    Search ranking is popularity-driven, so "Enchanted (Taylor's Version)" can outrank the
+    plain "Enchanted"; recall alone cannot tell them apart, precision can.
+    """
+    wanted = set(_tokens(query))
+    own = set(_tokens(" ".join(artists)))
+    extra = [t for t in _tokens(candidate) if t not in wanted and t not in own and t not in _NOISE_TOKENS]
+    # Spelling variants of a requested token are not "extra".
+    extra = [t for t in extra if not difflib.get_close_matches(t, wanted, n=1, cutoff=0.8)]
+    total = len(_tokens(candidate)) or 1
+    return max(0.0, 1.0 - len(extra) / total)
+
+
+_CREDIT_BRACKET = re.compile(
+    r"\s*[(\[]\s*(?:feat\.?|ft\.?|featuring|with|from|(?:\d{4}\s+)?(?:digital\s+)?re-?master(?:ed)?)\b[^)\]]*[)\]]", re.I)
+_PLAIN_SUFFIX = re.compile(
+    r"\s+-\s+(?:from\b.*|(?:\d{4}\s+)?(?:digital\s+)?re-?master(?:ed)?\b.*|(?:mono|stereo|radio edit|studio version|"
+    r"album version|single version|original version|original mix|explicit|deluxe(?: edition)?|bonus track)\s*$)", re.I)
+
+
+def _core_title(title: str) -> str:
+    """Spotify-style title without credits/provenance: ``X - From "Film"`` / ``X (feat. Y)`` -> ``X``."""
+    core = _PLAIN_SUFFIX.sub("", _CREDIT_BRACKET.sub("", title or "")).strip()
+    return core or (title or "").strip()
+
+
 def _clean_artist(name: str | None) -> str:
     name = (name or "").strip()
     return re.sub(r"\s*-\s*topic$", "", name, flags=re.I).strip()
@@ -177,12 +227,16 @@ class Music:
         clock: Callable[[], float] = time.time,
         cache_size: int = 5_000,
         cache_ttl: float = 600.0,
+        negative_ttl: float = 300.0,
     ) -> None:
         self._client_factory = client_factory
         self._clock = clock
         self._cache_size = cache_size
         self._cache_ttl = cache_ttl
+        self._negative_ttl = negative_ttl
         self._cache: OrderedDict[tuple, tuple[float, Track]] = OrderedDict()
+        self._negative: OrderedDict[tuple, tuple[float, type[MusicError], str]] = OrderedDict()
+        self._inflight: dict[tuple, list] = {}  # key -> [lock, waiters]
         self._lock = threading.Lock()
 
     # -- cache ---------------------------------------------------------
@@ -229,7 +283,8 @@ class Music:
         for attempt in attempts:
             try:
                 client = self._client_factory(attempt)
-                data = client.get_watch_playlist(videoId=video_id, radio=True, limit=limit)
+                seed = self._audio_seed(client, video_id)
+                data = client.get_watch_playlist(videoId=seed, radio=True, limit=limit)
             except Exception as error:  # noqa: BLE001
                 last = error
                 if attempt is not ANONYMOUS:
@@ -244,22 +299,86 @@ class Music:
             return RadioResult(tuple(tracks[:limit]), status)
         raise UpstreamError("radio lookup failed") from last
 
+    # A song's radio depends on which upload seeds it. YouTube Music seeds with the album-track
+    # (audio) upload; a music-video upload gives a noticeably different radio (about half the
+    # picks for the same song). So a video seed is swapped for its audio upload when one matches.
+    _VIDEO_TYPES = {"MUSIC_VIDEO_TYPE_OMV", "MUSIC_VIDEO_TYPE_UGC"}
+
+    def _audio_seed(self, client: Any, video_id: str) -> str:
+        """The album-track upload of ``video_id``'s song, or ``video_id`` itself when unsure."""
+        key = ("audio-seed", video_id)
+        if (hit := self._cached(key)) is not None:
+            return hit.video_id
+        seed = video_id
+        try:
+            data = client.get_watch_playlist(videoId=video_id, limit=1)
+            first = ((data or {}).get("tracks") or [None])[0]
+            if isinstance(first, dict) and first.get("videoId") == video_id \
+                    and first.get("videoType") in self._VIDEO_TYPES:
+                track = self._track(first)
+                selector = TrackSelector(title=track.title, artist=" ".join(track.artists),
+                                         duration_ms=track.duration_ms)
+                seed = self._by_title(client, selector).video_id
+        except Exception:  # noqa: BLE001  # no audio twin found: keep the requested id
+            seed = video_id
+        self._store(key, Track(video_id=seed, title=""))
+        return seed
+
     # -- resolution ----------------------------------------------------
     def resolve(self, selector: TrackSelector, context: UserContext = ANONYMOUS) -> Track:
         key = (selector.cache_key, context.cache_key)
         if (track := self._cached(key)) is not None:
             return track
-        client = self._client_factory(context)
-        if selector.video_id:
-            track = self._by_video_id(client, selector.video_id)
-        elif selector.query:
-            track = self._by_query(client, selector)
-        elif selector.title:
-            track = self._by_title(client, selector)
-        else:
-            raise NoMatch("empty selector")
-        self._store(key, track)
-        return track
+        self._raise_if_known_miss(key)
+        # Single flight: a warmup and the tap that follows it share one search, not two.
+        with self._lock:
+            slot = self._inflight.setdefault(key, [threading.Lock(), 0])
+            slot[1] += 1
+        try:
+            with slot[0]:
+                if (track := self._cached(key)) is not None:
+                    return track
+                self._raise_if_known_miss(key)
+                client = self._client_factory(context)
+                try:
+                    if selector.video_id:
+                        track = self._by_video_id(client, selector.video_id)
+                    elif selector.query:
+                        track = self._by_query(client, selector)
+                    elif selector.title:
+                        track = self._by_title(client, selector)
+                    else:
+                        raise NoMatch("empty selector")
+                except (NoMatch, RejectedMatch) as miss:
+                    if selector.title:
+                        log.warning("resolve %s: %r by %r (%s ms)", miss.code, selector.title, selector.artist,
+                                 selector.duration_ms)
+                    if selector.title and self._negative_ttl > 0:
+                        self._store_miss(key, miss)
+                    raise
+                self._store(key, track)
+                return track
+        finally:
+            with self._lock:
+                slot[1] -= 1
+                if slot[1] == 0:
+                    self._inflight.pop(key, None)
+
+    def _raise_if_known_miss(self, key: tuple) -> None:
+        with self._lock:
+            hit = self._negative.get(key)
+            if hit is None:
+                return
+            if self._clock() - hit[0] > self._negative_ttl:
+                del self._negative[key]
+                return
+        raise hit[1](hit[2])
+
+    def _store_miss(self, key: tuple, error: MusicError) -> None:
+        with self._lock:
+            self._negative[key] = (self._clock(), type(error), str(error))
+            while len(self._negative) > 1_000:
+                self._negative.popitem(last=False)
 
     def _by_video_id(self, client: Any, video_id: str) -> Track:
         # The watch ("next") endpoint returns music metadata including the album and
@@ -276,9 +395,9 @@ class Music:
             raise NoMatch("video not found")
         return self._track(item)
 
-    def _search(self, client: Any, query: str) -> list[dict[str, Any]]:
+    def _search(self, client: Any, query: str, filter: str = "songs") -> list[dict[str, Any]]:
         try:
-            results = client.search(query, filter="songs", limit=8, ignore_spelling=True)
+            results = client.search(query, filter=filter, limit=8, ignore_spelling=True)
         except Exception as error:  # noqa: BLE001
             raise UpstreamError("search failed") from error
         return [r for r in results or [] if isinstance(r, dict) and VIDEO_ID_RE.match(str(r.get("videoId") or ""))]
@@ -314,17 +433,27 @@ class Music:
 
     def _by_title(self, client: Any, selector: TrackSelector) -> Track:
         title, artist = selector.title or "", selector.artist or ""
-        items = self._search(client, f"{title} {artist}".strip())
+        query = f"{_core_title(title)} {artist}".strip()
+        try:
+            return self._pick(self._search(client, query), selector, strict_artist=False)
+        except NoMatch:
+            # Some releases (e.g. artist-channel uploads) are YouTube videos, not "songs", so the
+            # songs filter never lists them. Same checks, but the artist must then be credited.
+            return self._pick(self._search(client, query, "videos"), selector, strict_artist=True)
+
+    def _pick(self, items: list[dict[str, Any]], selector: TrackSelector, *, strict_artist: bool) -> Track:
+        title, artist = selector.title or "", selector.artist or ""
         if not items:
             raise NoMatch("no matching song")
+        forms = [title] + ([core] if (core := _core_title(title)) != title else [])
         requested = set(_tokens(title)) | set(_tokens(artist))
         ranked: list[tuple[float, float, int, Track]] = []
         considered = 0
         for rank, item in enumerate(items):
             track = self._track(item)
-            title_score = _score(title, track.title)
-            artist_score = _score(artist, " ".join(track.artists)) if artist else 1.0
-            if title_score < 0.8 or artist_score < 0.6:
+            title_score = max(_score(form, track.title) for form in forms)
+            artist_score = _artist_score(artist, track.artists) if artist else 1.0
+            if title_score < 0.8 or artist_score < (0.9 if strict_artist else 0.6):
                 continue  # a different song entirely: no match, not a rejection
             considered += 1
             tokens = set(_tokens(track.title)) | set(_tokens(" ".join(track.artists + ((track.album or ""),))))
@@ -335,7 +464,11 @@ class Music:
                 gap = abs(track.duration_ms - selector.duration_ms)
                 if gap > duration_tolerance_ms(selector.duration_ms):
                     continue
-            ranked.append((-(title_score + artist_score), gap, rank, track))
+            elif strict_artist and selector.duration_ms:
+                continue  # an unlisted-length video cannot be verified
+            # Precision keeps "Enchanted" from resolving to "Enchanted (Taylor's Version)".
+            precision = max(_title_precision(form, track.title, track.artists) for form in forms)
+            ranked.append((-(title_score + artist_score + precision), gap, rank, track))
         if not ranked:
             if considered:
                 raise RejectedMatch("candidates differ in version or duration")

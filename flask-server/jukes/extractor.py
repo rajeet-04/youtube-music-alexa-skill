@@ -6,6 +6,7 @@ codes and stderr is discarded after classification.
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import re
@@ -16,6 +17,8 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -32,8 +35,12 @@ log = logging.getLogger(__name__)
 # follow: default (cookie-aware), android_vr, web, tv. YTDLP_CLIENT_ORDER overrides the order
 # (comma-separated) without a rebuild.
 CLIENT_ORDER = ("tv_simply", "web_embedded", "default", "android_vr", "web", "tv")
-COOKIELESS_CLIENTS = {"tv_simply", "web_embedded", "android_vr", "ios"}
-FORMAT_SELECTOR = "140/bestaudio[ext=m4a]/bestaudio/best"
+# "fast" is the warm youtubei.js sidecar (ytresolver/): anonymous, ~0.5 s for a whole song.
+# It runs before yt-dlp when JUKES_FAST_RESOLVER_URL is set; any failure falls through.
+FAST_CLIENT = "fast"
+FAST_TIMEOUT_SECONDS = 20.0
+COOKIELESS_CLIENTS = {"tv_simply", "web_embedded", "android_vr", "ios", FAST_CLIENT}
+FORMAT_SELECTOR = "140[vcodec=none]/bestaudio[ext=m4a][vcodec=none]/bestaudio[vcodec=none]"
 CHUNK_BYTES = 256 * 1024
 STDERR_LIMIT = 16 * 1024
 
@@ -146,6 +153,72 @@ def _ffprobe(path: Path) -> dict[str, Any]:
     return result
 
 
+class _FastSource:
+    """Process-shaped view of the sidecar's ordered byte stream, so the yt-dlp read loop,
+    progressive stream and validation apply unchanged. Exit code 0 means every byte of
+    the advertised Content-Length arrived."""
+
+    pid = None
+    _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    def __init__(self, base_url: str, video_id: str, timeout: float) -> None:
+        url = f"{base_url.rstrip('/')}/audio/{video_id}"
+        try:
+            self._response = self._opener.open(url, timeout=timeout)
+        except urllib.error.HTTPError as error:
+            code = _fast_error_code(error)
+            error.close()
+            raise ExtractionError(code) from None
+        except (OSError, ValueError):
+            raise ExtractionError("fast_unreachable") from None
+        self.length = int(self._response.headers.get("Content-Length") or -1)
+        try:
+            self.duration = float(self._response.headers.get("X-Duration-Seconds") or "")
+        except ValueError:
+            self.duration = None
+        self.received = 0
+        self.returncode = None
+        self.stdout = self
+        self.stderr = io.BytesIO()
+
+    def read(self, size: int = -1) -> bytes:
+        try:
+            block = self._response.read(size)
+        except (OSError, ValueError):  # closed by kill() or a dropped connection
+            block = b""
+        self.received += len(block)
+        return block
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        if self.returncode is None:
+            complete = self.length > 0 and self.received == self.length
+            self.returncode = 0 if complete else 1
+            if not complete:
+                self.stderr = io.BytesIO(b"ERROR: fast resolver stream ended early")
+            self._response.close()
+        return self.returncode
+
+    def kill(self) -> None:
+        if self.returncode is None:
+            self.returncode = -signal.SIGKILL
+        self._response.close()
+
+    terminate = kill
+
+
+def _fast_error_code(error: "urllib.error.HTTPError") -> str:
+    """The sidecar's own code, for logs only: the fast path never makes a terminal
+    decision, because YTMUSIC refuses some videos that yt-dlp clients can still play."""
+    try:
+        code = json.loads(error.read(512) or b"{}").get("error")
+    except (OSError, ValueError, AttributeError):
+        code = None
+    return f"fast_{code}" if isinstance(code, str) and code.isidentifier() else "fast_http_{}".format(error.code)
+
+
 def _container(format_name: str) -> tuple[str, str] | None:
     names = {part.strip() for part in format_name.split(",")}
     if names & {"mp4", "m4a", "mov"}:
@@ -177,8 +250,15 @@ class Extractor:
         flaky_ttl_seconds: float = 30.0,
         retries: int = 2,
         socket_timeout: int = 10,
+        fast_resolver_url: str | None = None,
     ) -> None:
         self._popen = process_factory
+        self.fast_resolver_url = (fast_resolver_url if fast_resolver_url is not None
+                                  else os.environ.get("JUKES_FAST_RESOLVER_URL", "")).strip() or None
+        if process_factory is subprocess.Popen and os.environ.get('JUKES_EXTRACTOR_FORKSERVER') == '1':
+            from .fork_download import ForkDownload, warm
+            warm()
+            self._popen = ForkDownload
         self._public_probe = public_audio_probe or self._probe_public_audio
         self._media_probe = media_probe
         self._clock = clock
@@ -197,6 +277,8 @@ class Extractor:
         self._processes: set[Any] = set()
         self._closing = False
         self.on_retry = None
+        self.on_fast_fallback = None
+        self.streams = None
 
     # -- shared failure state ------------------------------------------
     def cooldown_remaining(self) -> float:
@@ -256,7 +338,7 @@ class Extractor:
         base_url = os.environ.get("YTDLP_BGUTIL_BASE_URL", "http://bgutil-provider:4416")
         if base_url:
             command += ["--extractor-args", f"youtubepot-bgutilhttp:base_url={base_url}"]
-        command += ["-o", "-", "--", key.video_id]
+        command += ["-o", "-", "--", f"https://music.youtube.com/watch?v={key.video_id}"]
         return command
 
     # -- public-scope probe --------------------------------------------
@@ -268,7 +350,7 @@ class Extractor:
         base_url = os.environ.get("YTDLP_BGUTIL_BASE_URL", "http://bgutil-provider:4416")
         if base_url:
             command += ["--extractor-args", f"youtubepot-bgutilhttp:base_url={base_url}"]
-        command += ["--", key.video_id]
+        command += ["--", f"https://music.youtube.com/watch?v={key.video_id}"]
         process = self._spawn(command)
         try:
             raw = process.stdout.read(2_000_000)
@@ -299,12 +381,23 @@ class Extractor:
             self._processes.add(process)
         return process
 
+    def _spawn_fast(self, key: AudioKey, timeout: float) -> _FastSource:
+        if self._closing:
+            raise ExtractionError("extraction_failed")
+        process = _FastSource(self.fast_resolver_url, key.video_id, min(timeout, 15.0))
+        with self._lock:
+            self._processes.add(process)
+        return process
+
     def _forget(self, process) -> None:
         with self._lock:
             self._processes.discard(process)
 
     @staticmethod
     def _kill(process) -> None:
+        if process.pid is None:  # the fast path's HTTP stream has no process group
+            process.kill()
+            return
         for sig in (signal.SIGTERM, signal.SIGKILL):
             try:
                 os.killpg(process.pid, sig)
@@ -336,12 +429,25 @@ class Extractor:
         cookie_path = None
         last_code = "extraction_failed"
         suspect = False
+        clients = ((FAST_CLIENT,) if self.fast_resolver_url else ()) + client_order()
+        ytdlp_attempts = 0
         try:
-            for index, client in enumerate(client_order()):
+            for client in clients:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     last_code = "extraction_timeout"
                     break
+                if client == FAST_CLIENT:
+                    try:
+                        return self._attempt(key, destination, client, None, min(remaining, FAST_TIMEOUT_SECONDS))
+                    except ExtractionError as error:
+                        if self.streams and self.streams.published(key):
+                            raise  # Never restart a generation after its bytes were published.
+                        # Never terminal and never a cooldown: yt-dlp decides those.
+                        log.warning("fast resolver attempt failed: %s; falling back to yt-dlp", error.code)
+                        if self.on_fast_fallback is not None:
+                            self.on_fast_fallback()
+                        continue
                 # Only an attempt with the server's cookies could reach non-public audio, so the
                 # public-audio probe (a full metadata extraction, ~3 s) runs just before the first
                 # such attempt. Anonymous clients go first and usually succeed without it.
@@ -354,8 +460,9 @@ class Extractor:
                         last_code = "extraction_timeout"
                         break
                 attempt_timeout = min(remaining, self.fallback_timeout_seconds)
-                if index and self.on_retry is not None:
+                if ytdlp_attempts and self.on_retry is not None:
                     self.on_retry()
+                ytdlp_attempts += 1
                 try:
                     return self._attempt(key, destination, client, cookie_path, attempt_timeout)
                 except ExtractionError as error:
@@ -364,6 +471,8 @@ class Extractor:
                     if error.code == "rate_limited":
                         self._start_cooldown()
                         raise
+                    if self.streams and self.streams.published(key):
+                        raise  # Never restart a generation after its bytes were published.
                     if error.code in {"video_unavailable", "invalid_media"}:
                         if error.code == "video_unavailable":
                             self._remember(self._dead, key.video_id, self.dead_ttl_seconds)
@@ -395,9 +504,28 @@ class Extractor:
         return path
 
     def _attempt(self, key, destination, client, cookie_path, timeout) -> DownloadResult:
+        attempt_started=time.monotonic()
+        first_byte_seconds=None
+        cache_write_seconds=stream_write_seconds=0.0
         with open(destination.path, "r+b") as partial:  # discard bytes from a failed client
             partial.truncate(0)
-        process = self._spawn(self._command(key, client, cookie_path))
+        metadata_path = Path(str(destination.path)+'.stream.json')
+        if self.streams:
+            metadata_path.unlink(missing_ok=True)
+        if client == FAST_CLIENT:
+            process = self._spawn_fast(key, timeout)
+            if self.streams and process.duration:
+                # The sidecar always serves itag 140 (AAC LC, ~128 kb/s): the stream-copy case.
+                metadata_path.write_text(json.dumps({"acodec": "mp4a.40.2", "abr": 128, "duration": process.duration}))
+        else:
+            command = self._command(key, client, cookie_path)
+            if self.streams:
+                command[1:1] = ['--print-to-file',
+                    'before_dl:{"acodec":%(acodec)j,"abr":%(abr)j,"duration":%(duration)j}',str(metadata_path)]
+            process = self._spawn(command)
+        stream = None
+        first_chunk = True
+        source_ok = False
         stderr_chunks: list[bytes] = []
 
         def drain_stderr() -> None:
@@ -416,6 +544,8 @@ class Extractor:
         def on_timeout() -> None:
             timed_out.set()
             self._kill(process)
+            if stream and stream.process.poll() is None:
+                stream.process.kill()  # Also unblock a stalled progressive stdin write.
 
         watchdog = threading.Timer(timeout, on_timeout)
         watchdog.daemon = True
@@ -423,15 +553,32 @@ class Extractor:
         try:
             try:
                 while True:
-                    chunk = process.stdout.read(CHUNK_BYTES)
+                    # Get startup audio promptly, then amortize persistent capacity checks.
+                    wanted=self.streams and self.streams.wanted(key)
+                    chunk = process.stdout.read(64 * 1024 if first_chunk and wanted else CHUNK_BYTES)
                     if not chunk:
                         break
+                    if first_byte_seconds is None: first_byte_seconds=time.monotonic()-attempt_started
+                    write_started=time.monotonic()
                     destination.write(chunk)
+                    cache_write_seconds+=time.monotonic()-write_started
+                    if first_chunk and wanted:
+                        try:
+                            metadata=json.loads(metadata_path.read_text())
+                            stream=self.streams.begin(key,metadata,source_path=destination.path)
+                        except (OSError,ValueError,TypeError):
+                            pass  # A missing hint only disables progressive output.
+                    first_chunk=False
+                    if stream:
+                        write_started=time.monotonic()
+                        stream.write(chunk)
+                        stream_write_seconds+=time.monotonic()-write_started
             except CacheCapacityError:
                 self._kill(process)
                 raise
             try:
                 code = process.wait(timeout=max(0.001, timeout))
+                source_ok = code == 0 and not timed_out.is_set()
             except subprocess.TimeoutExpired:
                 timed_out.set()
                 self._kill(process)
@@ -439,6 +586,12 @@ class Extractor:
         finally:
             watchdog.cancel()
             self._forget(process)
+            metadata_path.unlink(missing_ok=True)
+            if stream: stream.finish(source_ok)
+            if os.environ.get('JUKES_TIMING_LOG')=='1':
+                log.warning('audio timing video=%s client=%s first_byte=%.3f total=%.3f cache_write=%.3f stream_write=%.3f stream_ready=%s',
+                    key.video_id,client,first_byte_seconds or 0,time.monotonic()-attempt_started,
+                    cache_write_seconds,stream_write_seconds,stream.ready_seconds if stream else None)
         reader.join(timeout=2)
         if timed_out.is_set():
             raise ExtractionError("extraction_timeout")
@@ -458,7 +611,7 @@ class Extractor:
         probe = self._media_probe(path) or {}
         container = _container(str(probe.get("format_name", "")))
         audio = [s for s in probe.get("streams") or [] if s.get("codec_type") == "audio"]
-        if container is None or not audio:
+        if container is None or not audio or any(s.get("codec_type") == "video" for s in probe.get("streams") or []):
             raise ExtractionError("invalid_media")
         try:
             duration = float(probe.get("duration"))

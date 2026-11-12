@@ -419,3 +419,47 @@ def test_metrics_eviction_and_expiration_are_separate(tmp_path):
     cache.prune(now[0])
     total=cache.metrics.snapshot()['lifetime']
     assert total['warmup_expiration']==1 and total['eviction']==1
+
+
+def test_writes_within_admitted_capacity_skip_eviction_scan(cache, monkeypatch):
+    reservation = cache.reserve(AudioKey('write-budget', 'p'), requested=True, expected_size=16)
+    original = cache._ensure_room
+    scans = []
+    def scan(*args, **kwargs):
+        scans.append(args)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(cache, '_ensure_room', scan)
+    for _ in range(4):
+        reservation.write(b'1234')
+    assert reservation.path.read_bytes() == b'1234' * 4
+    assert scans == []
+    reservation.write(b'5')  # Growth still performs full admission before writing.
+    assert len(scans) == 1
+    assert reservation.reserved_bytes == 20
+
+
+def test_external_disk_pressure_rechecks_capacity_before_reserved_write(cache, monkeypatch):
+    reservation = cache.reserve(AudioKey('write-pressure', 'p'), requested=True, expected_size=16)
+    cache.config = replace(cache.config, min_free_disk_bytes=10)
+    monkeypatch.setattr(cache, 'disk_free_bytes', lambda: 20)
+    with pytest.raises(CacheCapacityError):
+        reservation.write(b'1234')
+    assert reservation.path.stat().st_size == 0
+
+
+def test_eviction_candidate_scan_reads_lease_snapshot_once(cache, monkeypatch):
+    for index in range(8):
+        key,path=make_audio(cache,f'scan-{index}',4)
+        cache.complete(key,path,requested=True)
+    pinned=AudioKey('scan-0','m4a-v1')
+    with cache.lease(pinned):
+        reads=[]
+        original=cache.store.all_leases
+        def leases():
+            reads.append(True)
+            return original()
+        monkeypatch.setattr(cache.store,'all_leases',leases)
+        eligible=cache._eligible_audio(set())
+        assert pinned.video_id not in {row['video_id'] for row in eligible}
+        assert len(eligible)==7
+        assert len(reads)==1  # Query cost stays constant as cache entry count grows.

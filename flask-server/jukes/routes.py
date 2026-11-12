@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -263,13 +264,17 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
 
     metrics = cache.metrics
 
-    def observed_submit(key, started_at):
-        observation = metrics.begin_preparation(started_at)
+    def preparation_path(key):
         entry = cache.lookup(key)
         joined = jobs.has_active(key)
         category = 'warmed' if entry and entry.pool=='warmup' else ('cached' if entry else ('promoted' if joined and jobs.has_speculative(key) else ('joined' if joined else 'cold')))
+        return entry, joined, category
+
+    def observed_submit(key, started_at, admitted=None):
+        observation = metrics.begin_preparation(started_at)
+        entry, joined, category = admitted[1] if admitted else preparation_path(key)
         try:
-            job = submit(key, True)
+            job = jobs.get(admitted[0].job_id) or admitted[0] if admitted else submit(key, True)
         except ApiError:
             metrics.record('admission_rejected')
             with cache.store.transaction() as c:
@@ -319,7 +324,29 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
         if job.status in ("failed", "evicted"):
             _, retryable = JOB_ERRORS.get(job.error_code or "", (502, True))
             view["error"] = {"code": job.error_code, "retryable": retryable}
+        streams=getattr(jobs,'streams',None)
+        if request.args.get('progressive')=='1' and streams and job.status not in ('failed','evicted'):
+            stream=streams.view(job.key)
+            if stream:
+                view.update(stream)
+                view['stream_url']=f"{base_url()}/v1/streams/{stream['stream_id']}/index.m3u8?video_id={job.key.video_id}"
         return view
+
+    @app.route('/v1/streams/<stream_id>/<filename>',methods=['GET','HEAD'])
+    def stream_file(stream_id,filename):
+        streams=getattr(jobs,'streams',None)
+        leased=streams.lease(stream_id,filename) if streams else None
+        if leased is None: raise ApiError(404,'stream_not_found','stream is unavailable')
+        path,release=leased
+        try:
+            playlist=filename=='index.m3u8'
+            response=send_file(path,mimetype='application/vnd.apple.mpegurl' if playlist else 'video/mp2t',
+                conditional=not playlist,etag=not playlist)
+            response.response=LeaseIterator(response.response,release)
+            response.headers['Cache-Control']='no-store' if playlist else 'private, max-age=1800, immutable'
+            return response
+        except BaseException:
+            release(); raise
 
     def serve(key: AudioKey, *, touch: bool, headers: dict[str, str] | None = None) -> Response | None:
         """Serve a completed file; the reader lease lives until the response closes."""
@@ -380,6 +407,22 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
         ctx = context()
         selector = selector_from_body()
         started_at = time.time()
+        admitted = None
+        streams = getattr(jobs, 'streams', None)
+        # Exact IDs already identify the public extraction key. Admit bounded work
+        # while Music resolves the response metadata; title matching still resolves first.
+        if requested and selector.video_id and os.environ.get('JUKES_PREPARE_OVERLAP') == '1':
+            early_key = AudioKey(selector.video_id, AUDIO_POLICY)
+            if request.args.get('progressive') == '1' and streams:
+                streams.request(early_key)
+            path = preparation_path(early_key)
+            if not path[0] and not path[1]:
+                throttle('requested', settings.requested_per_minute)
+            try:
+                admitted = submit(early_key, True), path
+            except ApiError:
+                metrics.record('admission_rejected')
+                raise
         try:
             track = resolve(selector, ctx)
         except ApiError as error:
@@ -388,12 +431,13 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
                 metrics.finish_preparation(observation,success=False,duration_seconds=time.time()-started_at,retryable=error.retryable)
             raise
         key = AudioKey(track.video_id, AUDIO_POLICY)
-        if not jobs.has_active(key) and cache.lookup(key) is None:  # only genuinely new work
+        if request.args.get('progressive')=='1' and streams: streams.request(key)
+        if admitted is None and not jobs.has_active(key) and cache.lookup(key) is None:  # only genuinely new work
             if requested:
                 throttle("requested", settings.requested_per_minute)
             else:
                 throttle("warmup", settings.warmup_per_minute)
-        job = observed_submit(key, started_at) if requested else submit(key, False)
+        job = observed_submit(key, started_at, admitted) if requested else submit(key, False)
         body = {**track.as_dict(), **job_view(job), "personalization_status": ctx.personalization_status}
         response = jsonify(body)
         response.status_code = 200 if job.status == "ready" else 202
@@ -417,7 +461,8 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
         # learns of a 3 s download at 3 s instead of at its next backoff tick.
         wait = request.args.get("wait", type=float)
         if wait and wait > 0 and job.status in ("queued", "downloading"):
-            job = jobs.wait(job_id, min(wait, settings.max_job_wait_seconds)) or job
+            job = jobs.wait(job_id, min(wait, settings.max_job_wait_seconds),
+                until_streamable=request.args.get('progressive')=='1') or job
         return jsonify(job_view(job))
 
     @app.route("/v1/audio/<video_id>", methods=["GET", "HEAD"])

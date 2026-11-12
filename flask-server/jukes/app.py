@@ -77,9 +77,14 @@ def build_services(config: CacheConfig | None = None) -> Services:
         identity = Identity(cache.store)
         credentials = Credentials(cache.store, key, account_probe=account_probe)
         server_cookies = ServerCookies(cache.store, key, probe=_cookie_probe)
+    extractor=Extractor()
+    if os.environ.get('JUKES_PROGRESSIVE') == '1':
+        from .streams import Streams
+        extractor.streams=Streams(cache)
     jobs = Jobs(
-        cache, Extractor(),
+        cache, extractor,
         worker_count=_int_env("JUKES_WORKERS", 4),
+        max_warmup_workers=_int_env('JUKES_WARMUP_WORKERS',1),
         max_queue_size=_int_env("JUKES_QUEUE_SIZE", 100),
         credential_provider=server_cookies.snapshot if server_cookies else None,
     )
@@ -89,6 +94,7 @@ def build_services(config: CacheConfig | None = None) -> Services:
             # A song's match (title/artist/length -> video) rarely changes; repeat prepares skip
             # the ~1.3 s YouTube Music search for a day.
             cache_ttl=float(os.environ.get("JUKES_RESOLVE_CACHE_SECONDS", 86400)),
+            negative_ttl=float(os.environ.get("JUKES_RESOLVE_MISS_SECONDS", 300)),
         ),
         identity=identity, credentials=credentials,
     )

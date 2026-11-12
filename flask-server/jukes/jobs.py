@@ -66,9 +66,11 @@ class Jobs:
         self.metrics = cache.metrics
         if hasattr(extractor, "on_retry"):
             extractor.on_retry = lambda: self.metrics.record("retry_fallback")
+        if hasattr(extractor, "on_fast_fallback"):
+            extractor.on_fast_fallback = lambda: self.metrics.record("fast_fallback")
         self.worker_count = max(1, worker_count)
         self.max_warmup_workers = (
-            max_warmup_workers if max_warmup_workers is not None else max(1, self.worker_count - 1)
+            max_warmup_workers if max_warmup_workers is not None else 1
         )
         self.max_queue_size = max_queue_size
         self._credential_provider = credential_provider
@@ -88,6 +90,7 @@ class Jobs:
         self._queued_mono = {}
         self._pid = cache._pid
         self._owner_start = cache._process_start_token
+        self.streams = getattr(extractor,'streams',None)
         if autostart:
             self.start()
 
@@ -121,6 +124,7 @@ class Jobs:
                 terminate()
             for thread in self._threads:
                 thread.join(2.0)
+        if self.streams: self.streams.shutdown()
 
     # -- persistence ---------------------------------------------------
     def _persist(self, job: Job, *, new: bool = False) -> None:
@@ -330,17 +334,19 @@ class Jobs:
             self._refresh(job_id)
             return self._jobs.get(job_id)
 
-    def wait(self, job_id: str, timeout: float) -> Job | None:
+    def wait(self, job_id: str, timeout: float, *, until_streamable: bool = False) -> Job | None:
         deadline = time.monotonic() + max(0.0, timeout)
         with self._cond:
             while True:
                 job = self._jobs.get(job_id)
                 if job is None or job.status not in ACTIVE:
                     return self.get(job_id)
+                if until_streamable and self.streams and self.streams.view(job.key):
+                    return job
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return job
-                self._cond.wait(remaining)
+                self._cond.wait(min(remaining,.1) if until_streamable else remaining)
 
     def prune(self, now: float | None = None) -> int:
         """Forget terminal jobs older than 24 hours (audio is unaffected)."""
@@ -413,11 +419,13 @@ class Jobs:
         key = job.key
         error_code: str | None = None
         run_started = time.monotonic()
+        source: str | None = None
         try:
             reservation = self.cache.reserve(key, requested=self._current(job.job_id).requested)
             if reservation.cached_entry is None:
                 snapshot = self._snapshot()
                 result = self.extractor.download(key, reservation, snapshot)
+                source = 'fast' if getattr(result, 'client', None) == 'fast' else 'ytdlp'
                 requested = self._current(job.job_id).requested
                 self.cache.complete(key, result.path, requested=requested)
         except ExtractionError as error:
@@ -432,6 +440,7 @@ class Jobs:
         except Exception:  # noqa: BLE001 - never surface extractor internals
             log.error("download job %s failed: extraction_failed", job.job_id)
             error_code = "extraction_failed"
+        if self.streams: self.streams.complete(key,error_code is None)
         if error_code is not None:
             self.cache.release_reservation(key)
         with self._cond:
@@ -439,6 +448,8 @@ class Jobs:
                 return  # leave persisted state recoverable
             if error_code is None:
                 self.metrics.record('job_timing',category='extraction',duration_seconds=max(0,time.monotonic()-run_started),once=job.job_id)
+                if source is not None:
+                    self.metrics.record('extraction_source',category=source,duration_seconds=max(0,time.monotonic()-run_started),once=job.job_id)
                 self._set(job.job_id, status="ready", error_code=None)
             else:
                 self._set(job.job_id, status="failed", error_code=error_code)
