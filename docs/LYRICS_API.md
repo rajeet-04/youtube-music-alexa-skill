@@ -59,11 +59,10 @@ Results are cached in the server database: hits for 30 days, misses for 1 day, a
 
 ## Contributions to LRCLIB
 
-Aligned official-subtitle results are queued in `jukes_lyrics_contrib`, keyed by YouTube Music's own title, artists, album and length. The publisher runs only with `JUKES_LYRICS_CONTRIBUTE=1`, at most one item every `JUKES_LYRICS_CONTRIBUTE_SECONDS` (default 600). Before publishing, it checks LRCLIB again:
+Aligned official-subtitle results and YouTube Music lyrics (including Musixmatch or LyricFind results) are queued in `jukes_lyrics_contrib`, keyed by YouTube Music's own title, artists, album and length. Source attribution is retained in the queue. Both timed and plain lyrics are eligible. The publisher runs only with `JUKES_LYRICS_CONTRIBUTE=1`, at most one item every `JUKES_LYRICS_CONTRIBUTE_SECONDS` (default 600). Before publishing, it checks LRCLIB again:
 
 - If LRCLIB already has trustworthy timing under that signature, the item is skipped.
+- A plain-only candidate is also skipped if LRCLIB already has a record; otherwise it is published as plain lyrics without invented timing.
 - If LRCLIB has no record, or only untrustworthy timing, the lyrics are published. Publishing to an existing signature replaces that record's lyrics.
 
 The proof-of-work challenge runs in a child process. An item is marked `failed` after 3 failed attempts.
-
-YouTube Music lyrics (Musixmatch, LyricFind) are licensed and are never queued.

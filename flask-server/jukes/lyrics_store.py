@@ -1,10 +1,8 @@
 """Lyrics response cache and the LRCLIB contribution queue (same SQLite database).
 
-Contribution policy: only lyrics derived from hand-made subtitles on another upload of the
-same recording, proven by audio alignment, are offered. YouTube Music lyrics (Musixmatch,
-LyricFind) are licensed and never contributed. A song is published only when LRCLIB has no
-trustworthy timed record for YouTube Music's own signature: publishing to an existing
-signature replaces that record's lyrics.
+Contributions include audio-aligned subtitles and YouTube Music lyrics. A song is
+published only when LRCLIB has no equivalent or better record for its signature:
+publishing to an existing signature replaces that record's lyrics.
 """
 
 from __future__ import annotations
@@ -68,11 +66,21 @@ class LyricsStore:
         if not (meta.get('title') and meta.get('artist') and meta.get('duration_s')):
             return
         now = self.clock()
-        payload = json.dumps({'meta': meta, 'lines': result['lines'], 'source': result['source'],
+        lines = result.get('lines') or []
+        plain = result.get('plain_lyrics') or '\n'.join(line['text'] for line in lines)
+        if not plain.strip():
+            return
+        payload = json.dumps({'meta': meta, 'lines': lines, 'plain_lyrics': plain, 'source': result['source'],
+                              'attribution': result.get('attribution'),
                               'subtitle_video_id': result.get('subtitle_video_id')}, ensure_ascii=False)
         with self.store.transaction() as connection:
             connection.execute("INSERT OR IGNORE INTO jukes_lyrics_contrib VALUES (?, ?, 'pending', 0, NULL, ?, ?)",
                                (video_id, payload, now, now))
+            if lines:
+                # Upgrade an unprocessed plain candidate without replacing a timed one.
+                row = connection.execute("SELECT payload FROM jukes_lyrics_contrib WHERE video_id = ? AND state = 'pending'", (video_id,)).fetchone()
+                if row and not json.loads(row['payload']).get('lines'):
+                    connection.execute("UPDATE jukes_lyrics_contrib SET payload = ?, updated_at = ? WHERE video_id = ? AND state = 'pending'", (payload, now, video_id))
 
     def next_pending(self):
         with self.store.connection() as connection:
@@ -117,7 +125,7 @@ class Publisher:
         if item is None:
             return None
         video_id, payload, attempts = item
-        meta, lines = payload['meta'], payload['lines']
+        meta, lines = payload['meta'], payload.get('lines') or []
         signature = {'track_name': meta['title'], 'artist_name': meta['artist'],
                      'album_name': meta.get('album') or '', 'duration': str(meta['duration_s'])}
         try:
@@ -125,7 +133,10 @@ class Publisher:
             if existing and existing['sync'] in ('line', 'word', 'instrumental'):
                 self.queue.mark(video_id, 'skipped', 'lrclib_has_timed')
                 return 'skipped'
-            if timing_problem([l['start_ms'] for l in lines], meta['duration_s'] * 1000) or len(lines) < 4:
+            if not lines and existing:
+                self.queue.mark(video_id, 'skipped', 'lrclib_has_lyrics')
+                return 'skipped'
+            if lines and (timing_problem([l['start_ms'] for l in lines], meta['duration_s'] * 1000) or len(lines) < 4):
                 self.queue.mark(video_id, 'skipped', 'timing_check')
                 return 'skipped'
             status, raw = self.post('request-challenge', {})
@@ -133,8 +144,9 @@ class Publisher:
             nonce = subprocess.run([sys.executable, '-c', _SOLVER, challenge['prefix'], challenge['target']],
                                    capture_output=True, text=True, timeout=300, check=True).stdout.strip()
             body = {'trackName': meta['title'], 'artistName': meta['artist'], 'albumName': meta.get('album') or '',
-                    'duration': meta['duration_s'], 'plainLyrics': '\n'.join(l['text'] for l in lines),
-                    'syncedLyrics': to_lrc(lines)}
+                    'duration': meta['duration_s'], 'plainLyrics': payload.get('plain_lyrics') or '\n'.join(l['text'] for l in lines)}
+            if lines:
+                body['syncedLyrics'] = to_lrc(lines)
             status, _ = self.post('publish', body, {'X-Publish-Token': f"{challenge['prefix']}:{nonce}"})
             if status == 201:
                 self.queue.mark(video_id, 'published')

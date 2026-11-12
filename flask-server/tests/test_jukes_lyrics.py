@@ -245,9 +245,52 @@ def test_lyrics_store_cache_and_queue(tmp_path):
     assert store.get('k') == {'sync': 'line'} and store.get('miss') is None
     now[0] += 11
     assert store.get('k') is store.MISS
-    store.offer('vid', {'source': 'youtube_subtitles', 'lines': []}, {'title': 'T', 'artist': 'A', 'duration_s': 9})
+    store.offer('vid', {'source': 'youtube_music', 'plain_lyrics': 'lyrics'}, {'title': 'T', 'artist': 'A', 'duration_s': 9})
     store.offer('bad', {'source': 'youtube_subtitles', 'lines': []}, {'title': '', 'artist': 'A', 'duration_s': 9})
     assert store.next_pending()[0] == 'vid' and store.counts() == {'pending': 1}
+
+
+def test_music_lookup_offers_plain_and_timed_lyrics(monkeypatch):
+    store = _MemoryStore()
+    service = Lyrics(contributions=store)
+    monkeypatch.setattr(service, '_lrclib', lambda *a: None)
+    monkeypatch.setattr(service, '_youtube', lambda *a: None)
+    monkeypatch.setattr(service, 'track_metadata', lambda *a: {'title': 'T', 'artist': 'A', 'duration_s': 222})
+    for sync in ('none', 'line'):
+        monkeypatch.setattr(service, '_music', lambda *a: {'source': 'youtube_music', 'sync': sync, 'plain_lyrics': 'text'})
+        service._resolve('T', 'A', '', 222000, 'abcdefghijk')
+    assert [offer[1] for offer in store.offers] == ['youtube_music', 'youtube_music']
+
+
+def test_plain_music_queue_is_upgraded_and_does_not_replace_existing_lyrics(tmp_path):
+    from jukes.lyrics_store import LyricsStore, Publisher
+    from jukes.store import Store
+    store = LyricsStore(Store(tmp_path / 'db.sqlite3'))
+    meta = {'title': 'T', 'artist': 'A', 'duration_s': 222}
+    plain = {'source': 'youtube_music', 'plain_lyrics': 'first\nsecond', 'attribution': 'Source: LyricFind'}
+    store.offer('a', plain, meta)
+    assert store.next_pending()[1]['attribution'] == 'Source: LyricFind'
+    lines = [{'text': str(i), 'start_ms': 1234 + i * 3410} for i in range(4)]
+    store.offer('a', {'source': 'youtube_music', 'lines': lines}, meta)
+    assert store.next_pending()[1]['lines'] == lines
+    store.offer('b', plain, meta)
+    store.mark('a', 'skipped')
+    existing = {'id': 4, 'duration': 222, 'plainLyrics': 'already exists'}
+    assert Publisher(store, post=lambda *args: pytest.fail('must not publish'), fetch=lambda *args: existing).run_once() == 'skipped'
+
+
+def test_plain_music_publisher_sends_plain_when_missing(tmp_path):
+    from jukes.lyrics_store import LyricsStore, Publisher
+    from jukes.store import Store
+    store = LyricsStore(Store(tmp_path / 'db.sqlite3'))
+    store.offer('a', {'source': 'youtube_music', 'plain_lyrics': 'one\ntwo'}, {'title': 'T', 'artist': 'A', 'duration_s': 222})
+    posts = []
+    def post(path, body, headers=None):
+        posts.append((path, body))
+        return (200, json.dumps({'prefix': 'p', 'target': 'ff' * 32}).encode()) if path == 'request-challenge' else (201, b'')
+    assert Publisher(store, post=post, fetch=lambda *a: None).run_once() == 'published'
+    assert posts[-1][1]['plainLyrics'] == 'one\ntwo'
+    assert 'syncedLyrics' not in posts[-1][1]
 
 
 def test_publisher_skips_existing_timed_record_and_publishes_otherwise(tmp_path):

@@ -519,6 +519,11 @@ class Lyrics:
                 failed = True
                 log.warning('Lyrics source failed')
                 continue
+            if result and result.get('source') == 'youtube_music' and self.contributions:
+                try:
+                    self.contributions.offer(video_id, result, self.track_metadata(video_id, rows))
+                except Exception:
+                    log.warning('Lyrics contribution offer failed')
             if result and result['sync'] != 'none':
                 return result, failed
             if result:
