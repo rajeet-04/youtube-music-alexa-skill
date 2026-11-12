@@ -16,6 +16,8 @@ from .guard import acquire_exclusive
 from .health import register_health
 from .identity import Identity
 from .jobs import Jobs
+from .lyrics import Lyrics, audio_source
+from .lyrics_store import LyricsStore, Publisher
 from .limits import RateLimiter, client_address, parse_networks
 from .music import Music
 from .personalization import ClientFactory, account_probe
@@ -99,6 +101,11 @@ def build_services(config: CacheConfig | None = None) -> Services:
         identity=identity, credentials=credentials,
     )
     services.server_cookies = server_cookies
+    lyrics_store = LyricsStore(cache.store)
+    services.lyrics = Lyrics(server_cookies, store=lyrics_store, audio=audio_source(cache, extractor),
+                             contributions=lyrics_store)  # always queued; published only when enabled
+    if os.environ.get("JUKES_LYRICS_CONTRIBUTE") == "1":
+        Publisher(lyrics_store, interval=_int_env("JUKES_LYRICS_CONTRIBUTE_SECONDS", 600)).start()
     if (keepalive := _int_env("JUKES_MUSIC_KEEPALIVE_SECONDS", 45)):
         services.music.start_keepalive(keepalive)
     return services

@@ -68,6 +68,7 @@ class Services:
     credentials: Any = None
     limiter: Any = None
     server_cookies: Any = None
+    lyrics: Any = None
     # Optional hook for admin/readiness code; routes themselves use identity/credentials.
     context_provider: Callable[[str], UserContext] | None = None
 
@@ -426,6 +427,27 @@ def register_routes(app: Flask, services: Services, settings: Settings) -> None:
         return response
 
     # -- versioned API -------------------------------------------------
+    @app.get('/v1/lyrics')
+    def lyrics_lookup():
+        throttle('lyrics', 20)
+        title = (request.args.get('title') or '').strip()
+        artist = (request.args.get('artist') or '').strip()
+        album = (request.args.get('album') or '').strip()
+        video_id = (request.args.get('video_id') or '').strip()
+        duration = request.args.get('duration_ms', type=int)
+        if not title or not artist or len(title) > 200 or len(artist) > 200 or len(album) > 200:
+            raise ApiError(400, 'invalid_request', 'title and artist are required (maximum 200 characters)')
+        if video_id and not VIDEO_ID_RE.fullmatch(video_id):
+            raise ApiError(400, 'invalid_request', 'invalid video_id')
+        if 'duration_ms' in request.args and (duration is None or duration <= 0 or duration > 86400000):
+            raise ApiError(400, 'invalid_request', 'invalid duration_ms')
+        if services.lyrics is None:
+            raise ApiError(503, 'lyrics_unavailable', 'lyrics service unavailable', True)
+        result = services.lyrics.lookup(title, artist, album, duration, video_id)
+        if result is None:
+            raise ApiError(404, 'lyrics_not_found', 'lyrics not found')
+        return jsonify(result)
+
     def start(requested: bool):
         throttle("http", settings.http_per_minute)
         ctx = context()

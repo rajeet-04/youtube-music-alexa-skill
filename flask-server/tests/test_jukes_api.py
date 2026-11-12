@@ -29,6 +29,18 @@ VID = "abcdefghijk"
 VID2 = "bbbbbbbbbbb"
 
 
+def test_lyrics_endpoint_validation_and_result(env):
+    env.app.extensions['jukes'].lyrics = type('Lyrics', (), {
+        'lookup': lambda self, *args: {'source': 'lrclib', 'sync': 'line'},
+    })()
+    assert env.client.get('/v1/lyrics?title=Song').status_code == 400
+    assert env.client.get('/v1/lyrics?title=Song&artist=Band&video_id=invalid').status_code == 400
+    assert env.client.get('/v1/lyrics?title=Song&artist=Band&duration_ms=bad').status_code == 400
+    response = env.client.get('/v1/lyrics?title=Song&artist=Band&video_id=abcdefghijk')
+    assert response.status_code == 200
+    assert response.get_json()['sync'] == 'line'
+
+
 class FakeExtractor:
     def __init__(self):
         self.gate = None
