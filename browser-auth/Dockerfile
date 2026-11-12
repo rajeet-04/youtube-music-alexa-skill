@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY requirements.txt .
 RUN uv pip install --system --no-cache -r requirements.txt
-COPY service.py entrypoint.sh novnc-controls.js ./
+COPY service.py entrypoint.sh novnc-controls.js healthcheck.py ./
 RUN chmod 0755 /app/entrypoint.sh \
     && mkdir -p /profile \
     && cp /app/novnc-controls.js /usr/share/novnc/novnc-controls.js \
@@ -24,5 +24,5 @@ RUN chmod 0755 /app/entrypoint.sh \
 
 EXPOSE 6080 8765
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=5 \
-  CMD python -c "import socket, urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=2); s=socket.create_connection(('127.0.0.1',5900),timeout=2); assert s.recv(12).startswith(b'RFB '); s.close(); urllib.request.urlopen('http://127.0.0.1:6080/vnc.html', timeout=2)" || exit 1
+  CMD python /app/healthcheck.py || exit 1
 ENTRYPOINT ["/app/entrypoint.sh"]

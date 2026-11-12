@@ -30,8 +30,15 @@ openbox >/tmp/openbox.log 2>&1 &
 # frame and the signed-in browser appears to never have opened. Disable Damage
 # and fall back to timed full-frame polling so the viewer always sees the live
 # Chromium window. -wait=20ms poll, -deferupdate=10ms cuts encoder overhead.
-x11vnc -display "${DISPLAY:-:99}" -forever -shared -nopw -localhost -rfbport 5900 -noipv6 -threads \
-  -noxdamage -wait 20 -deferupdate 10 -o /tmp/x11vnc.log >/dev/null 2>&1 &
+# Restart VNC if it exits: Docker cannot restart this child while waitress is alive.
+(
+  while :; do
+    x11vnc -display "${DISPLAY:-:99}" -forever -shared -nopw -localhost -rfbport 5900 -noipv6 -threads \
+      -noxdamage -wait 20 -deferupdate 10 -o /tmp/x11vnc.log >/dev/null 2>&1 || :
+    echo "x11vnc exited; restarting in 2 seconds" >&2
+    sleep 2
+  done
+) &
 websockify --web=/usr/share/novnc/ "${NOVNC_PORT:-6080}" localhost:5900 >/tmp/novnc.log 2>&1 &
 
 exec waitress-serve --host=0.0.0.0 --port=8765 --threads=4 service:app
