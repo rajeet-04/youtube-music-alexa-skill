@@ -30,6 +30,27 @@ print(n)
 """
 
 
+def to_lyricsfile(meta, lines, plain):
+    """LRCLIB's YAML lyricsfile (version 1.0): line end times, and word timings when a line has
+    them (`words`: text with its trailing space, start_ms). LRCLIB keeps it as given and marks
+    word-synced records. Strings are JSON-quoted, which YAML reads as double-quoted scalars."""
+    q = lambda v: json.dumps(v, ensure_ascii=False)
+    out = ["version: '1.0'", 'metadata:', f"  title: {q(meta['title'])}", f"  artist: {q(meta['artist'])}",
+           f"  album: {q(meta.get('album') or '')}", f"  duration_ms: {int(meta['duration_s'] * 1000)}",
+           '  instrumental: false', 'lines:']
+    for line in lines:
+        out += [f"- text: {q(line['text'])}", f"  start_ms: {int(line['start_ms'])}"]
+        if isinstance(line.get('end_ms'), int):
+            out.append(f"  end_ms: {line['end_ms']}")
+        words = [w for w in line.get('words') or [] if w.get('text') and isinstance(w.get('start_ms'), int)]
+        if words:
+            out.append('  words:')
+            for word in words:
+                out += [f"  - text: {q(word['text'])}", f"    start_ms: {word['start_ms']}"]
+    out.append(f'plain: {q(plain)}')
+    return '\n'.join(out) + '\n'
+
+
 class LyricsStore:
     MISS = object()
 
@@ -147,6 +168,7 @@ class Publisher:
                     'duration': meta['duration_s'], 'plainLyrics': payload.get('plain_lyrics') or '\n'.join(l['text'] for l in lines)}
             if lines:
                 body['syncedLyrics'] = to_lrc(lines)
+                body['lyricsfile'] = to_lyricsfile(meta, lines, body['plainLyrics'])
             status, _ = self.post('publish', body, {'X-Publish-Token': f"{challenge['prefix']}:{nonce}"})
             if status == 201:
                 self.queue.mark(video_id, 'published')

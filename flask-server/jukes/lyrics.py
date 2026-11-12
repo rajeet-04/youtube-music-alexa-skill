@@ -41,6 +41,7 @@ from .server_cookies import cookie_header, parse_netscape
 log = logging.getLogger(__name__)
 MAX_RESPONSE = 2_000_000
 SEARCH_TOLERANCE_MS = 5_000   # LRCLIB search: record length vs the song
+WORD_SYNC_TOLERANCE_MS = 2_000  # a word-synced copy wins only when its length is this close
 LENGTH_TOLERANCE_MS = 3_000   # a YouTube video vs the song, without alignment
 LANGUAGES = ('en', 'hi', 'ur')
 HIT_TTL = 30 * 86400
@@ -258,8 +259,9 @@ class Lyrics:
         if duration:
             params['duration'] = str(duration / 1000)
         exact = self._record(self._lrclib_fetch('get', params), duration)
-        if exact and exact['sync'] != 'none':
+        if exact and exact['sync'] == 'word':
             return exact
+        # A line-timed exact match still searches: another copy may have word timings.
         # /api/get misses title variants. Search ignores length; accept the closest record
         # within SEARCH_TOLERANCE_MS, or an exact title+artist match without a length.
         try:
@@ -286,11 +288,15 @@ class Lyrics:
                 gap = 0
             else:
                 continue
-            candidates.append((record['sync'] == 'none', gap, record))  # timed first, then closest
+            # timed first; word-timed when its length is as close as a word highlight needs; then closest
+            words = record['sync'] == 'word' and gap <= WORD_SYNC_TOLERANCE_MS
+            candidates.append((record['sync'] == 'none', not words, gap, record))
         if not candidates:
             return exact
-        best = min(candidates, key=lambda c: c[:2])[2]
-        return exact if exact and best['sync'] == 'none' else best
+        best = min(candidates, key=lambda c: c[:3])
+        if exact and (best[0] or (exact['sync'] != 'none' and best[1])):
+            return exact  # the search found nothing better than the exact match
+        return best[3]
 
     @staticmethod
     def _record(data, duration=None):

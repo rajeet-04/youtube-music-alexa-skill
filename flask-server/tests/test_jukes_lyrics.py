@@ -316,6 +316,7 @@ def test_publisher_skips_existing_timed_record_and_publishes_otherwise(tmp_path)
     assert path == 'publish' and headers == {'X-Publish-Token': 'p:0'}
     assert body['trackName'] == meta['title'] and body['duration'] == 222
     assert body['syncedLyrics'].startswith('[00:01.00] line 0') and body['plainLyrics'].startswith('line 0')
+    assert body['lyricsfile'].startswith("version: '1.0'") and '- text: "line 0"' in body['lyricsfile']
     assert store.counts() == {'published': 1, 'skipped': 1}
 
 
@@ -348,3 +349,31 @@ def test_subtitle_decoration_is_removed():
         'Tere Naal Laiyaan,Laiyaan', 'Kya hua?', 'Tu Hi Toh Mera ASMAAN']
     # ASR captions are left as they are
     assert caption_lines(payload)[0]['text'] == 'Dil Tere Agge.....'
+
+
+def test_lyricsfile_carries_line_ends_and_word_timings():
+    yaml = pytest.importorskip('yaml')
+    from jukes.lyrics_store import to_lyricsfile
+    meta = {'title': 'Ji "Huzoor"', 'artist': 'Sparsh', 'album': '', 'duration_s': 167}
+    lines = [{'text': "I've been", 'start_ms': 1000, 'end_ms': 2000,
+              'words': [{'text': "I've ", 'start_ms': 1000}, {'text': 'been', 'start_ms': 1500}]},
+             {'text': 'ਸੋਚਾਂ ਤੇਰੇ', 'start_ms': 3000}]
+    doc = yaml.safe_load(to_lyricsfile(meta, lines, "I've been\nਸੋਚਾਂ ਤੇਰੇ"))
+    assert doc['metadata'] == {'title': 'Ji "Huzoor"', 'artist': 'Sparsh', 'album': '', 'duration_ms': 167000, 'instrumental': False}
+    assert doc['lines'][0] == {'text': "I've been", 'start_ms': 1000, 'end_ms': 2000,
+                               'words': [{'text': "I've ", 'start_ms': 1000}, {'text': 'been', 'start_ms': 1500}]}
+    assert doc['lines'][1] == {'text': 'ਸੋਚਾਂ ਤੇਰੇ', 'start_ms': 3000}
+
+
+def test_word_synced_copy_beats_a_line_synced_exact_match():
+    line = {'id': 1, 'trackName': 'Blinding Lights', 'artistName': 'The Weeknd', 'duration': 200,
+            'syncedLyrics': '[00:13.12] Yeah\n[00:27.17] call'}
+    word = {**line, 'id': 2, 'duration': 201, 'hasWordSync': True, 'lyricsfile': "version: '1.0'\nlines:\n- text: Yeah\n  words: []\n"}
+    far = {**word, 'id': 3, 'duration': 204}
+    fetch = lambda kind, params: line if kind == 'get' else [line, far, word]
+    assert Lyrics._lrclib.__get__(type('L', (), {'_lrclib_fetch': staticmethod(fetch), '_record': staticmethod(Lyrics._record)})())(
+        'Blinding Lights', 'The Weeknd', '', 200_000)['lrclib_id'] == 2
+    # no word-synced copy close enough: the exact match stays
+    fetch = lambda kind, params: line if kind == 'get' else [line, far]
+    assert Lyrics._lrclib.__get__(type('L', (), {'_lrclib_fetch': staticmethod(fetch), '_record': staticmethod(Lyrics._record)})())(
+        'Blinding Lights', 'The Weeknd', '', 200_000)['lrclib_id'] == 1
