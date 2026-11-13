@@ -310,12 +310,12 @@ class Lyrics:
         problem = None
         if synced and not data.get('instrumental'):
             stamps = [ms for ms, _ in lrc_lines(synced)]
-            problem = timing_problem(stamps, length) or timing_problem(stamps, duration)
+            problem = ('no_timed_lines' if not any(text for _, text in lrc_lines(synced)) else None) or timing_problem(stamps, length) or timing_problem(stamps, duration)
         if data.get('instrumental'):
             sync = 'instrumental'
         elif problem:
             sync = 'none'  # keep the words, never the untrustworthy timing
-            plain = plain or '\n'.join(text for _, text in lrc_lines(synced) if text)
+            plain = plain or '\n'.join(text for _, text in lrc_lines(synced) if text) or synced
         elif data.get('hasWordSync') and data.get('lyricsfile'):
             sync = 'word'
         elif synced:

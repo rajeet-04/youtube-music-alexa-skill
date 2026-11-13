@@ -57,6 +57,15 @@ def test_lrclib_parsing(monkeypatch):
     assert result['track']['duration_ms'] == 210000
 
 
+def test_lrclib_untimed_synced_field_is_preserved_as_plain():
+    record = Lyrics._record({'id': 24454179, 'trackName': 'Na Pata Mujhe', 'artistName': 'ABS & PATHAK',
+                             'duration': 180, 'syncedLyrics': 'First line\nSecond line'})
+    assert record['sync'] == 'none'
+    assert record['timing_rejected'] == 'no_timed_lines'
+    assert record['synced_lyrics'] is None
+    assert record['plain_lyrics'] == 'First line\nSecond line'
+
+
 
 def test_all_caption_fetches_failing_is_upstream_error(monkeypatch):
     import yt_dlp
